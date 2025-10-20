@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 )
@@ -41,6 +43,7 @@ func main() {
 		createCmd(),
 		listCmd(),
 		startCmd(),
+		statusCmd(),
 		stopCmd(),
 		deleteCmd(),
 		execCmd(),
@@ -51,6 +54,7 @@ func main() {
 		infoCmd(),
 		setupCmd(),
 		cleanCmd(),
+		attachCmd(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -125,15 +129,20 @@ func startCmd() *cobra.Command {
 }
 
 func stopCmd() *cobra.Command {
-	return &cobra.Command{
+	var force bool
+
+	cmd := &cobra.Command{
 		Use:   "stop [container-name]",
 		Short: "Stop a container",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cm := NewContainerManager(cfg)
-			return cm.Stop(args[0])
+			return cm.Stop(args[0], force)
 		},
 	}
+
+	cmd.Flags().BoolVarP(&force, "force", "f", false, "Force stop the container")
+	return cmd
 }
 
 func deleteCmd() *cobra.Command {
@@ -336,4 +345,91 @@ func getEnvOrDefault(key, defaultVal string) string {
 		return val
 	}
 	return defaultVal
+}
+
+func attachCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "attach [container-name]",
+		Short: "Attach to a running VM container",
+		Long: `Attach to a running VM-like container and get an interactive shell.
+This is useful for VM containers that are running in the background.`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cm := NewContainerManager(cfg)
+			return cm.Attach(args[0])
+		},
+	}
+}
+
+func statusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status [container-name]",
+		Short: "Show detailed status of a container",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := args[0]
+			rt := NewRuntime(cfg)
+
+			// Get runtime state
+			state, err := rt.State(name)
+			if err != nil {
+				fmt.Printf("Container: %s\n", name)
+				fmt.Printf("Status: NOT FOUND or ERROR\n")
+				fmt.Printf("Error: %v\n", err)
+
+				// Check if it exists in filesystem
+				containerPath := filepath.Join(cfg.ContainersPath, name)
+				if _, statErr := os.Stat(containerPath); statErr == nil {
+					fmt.Println("\nNote: Container directory exists but runtime has no record.")
+					fmt.Println("This may indicate the container exited or crashed.")
+
+					// Check logs
+					logPath := filepath.Join(cfg.RunPath, "logs", name+".log")
+					if _, logErr := os.Stat(logPath); logErr == nil {
+						fmt.Printf("\nRecent logs from %s:\n", logPath)
+						fmt.Println("---")
+						tailCmd := exec.Command("tail", "-n", "20", logPath)
+						tailCmd.Stdout = os.Stdout
+						tailCmd.Run()
+					}
+				}
+				return nil
+			}
+
+			fmt.Printf("Container: %s\n", name)
+			fmt.Printf("Status: %s\n", strings.ToUpper(state))
+
+			// Get metadata
+			metadataPath := filepath.Join(cfg.ContainersPath, name, "metadata.json")
+			if data, err := os.ReadFile(metadataPath); err == nil {
+				var metadata map[string]any
+				if json.Unmarshal(data, &metadata) == nil {
+					fmt.Printf("Image: %s\n", metadata["image"])
+					if vmMode, ok := metadata["vm_mode"].(bool); ok && vmMode {
+						fmt.Println("Type: VM Container")
+						if vmConfig, ok := metadata["vm_config"].(map[string]any); ok {
+							if enableSSH, ok := vmConfig["EnableSSH"].(bool); ok && enableSSH {
+								fmt.Printf("SSH: Enabled on port %v\n", vmConfig["SSHPort"])
+							}
+							if hostname, ok := vmConfig["Hostname"].(string); ok && hostname != "" {
+								fmt.Printf("Hostname: %s\n", hostname)
+							}
+						}
+					}
+				}
+			}
+
+			// Show log location
+			logPath := filepath.Join(cfg.RunPath, "logs", name+".log")
+			fmt.Printf("\nLog file: %s\n", logPath)
+
+			if state == "running" {
+				fmt.Println("\nTo attach: dbox attach", name)
+				fmt.Println("To view logs: dbox logs", name)
+				fmt.Println("To view init logs: dbox exec", name, "cat /var/log/dbox-init.log")
+			}
+
+			return nil
+		},
+	}
 }

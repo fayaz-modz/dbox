@@ -23,6 +23,10 @@ type ContainerManager struct {
 	imgMgr  *ImageManager
 }
 
+func (cm *ContainerManager) Attach(name string) error {
+	return cm.runtime.Exec(name, []string{"/bin/sh"})
+}
+
 type CreateOptions struct {
 	Image           string
 	Name            string
@@ -110,7 +114,7 @@ func (cm *ContainerManager) Run(opts *RunOptions) error {
 		defer func() {
 			fmt.Printf("\nAuto-removing container %s...\n", opts.Name)
 			// Ensure we stop it before deleting, just in case.
-			cm.runtime.Stop(opts.Name)
+			cm.runtime.Stop(opts.Name, true)
 			cm.Delete(opts.Name, true)
 		}()
 	}
@@ -308,7 +312,7 @@ func (cm *ContainerManager) Delete(name string, force bool) error {
 			}
 			// If --force is used, stop the container before deleting.
 			fmt.Printf("Container '%s' is %s, stopping it due to --force flag...\n", name, state)
-			if err := cm.runtime.Stop(name); err != nil {
+			if err := cm.runtime.Stop(name, true); err != nil {
 				return fmt.Errorf("failed to stop container '%s' for forced deletion: %w", name, err)
 			}
 			// Now that it's stopped, we can delete it via the runtime.
@@ -495,8 +499,8 @@ func (cm *ContainerManager) Start(name string) error {
 	return cm.runtime.Start(name, logPath)
 }
 
-func (cm *ContainerManager) Stop(name string) error {
-	return cm.runtime.Stop(name)
+func (cm *ContainerManager) Stop(name string, force bool) error {
+	return cm.runtime.Stop(name, force)
 }
 
 func (cm *ContainerManager) Exec(name string, command []string) error {
@@ -606,7 +610,7 @@ func printCopyProgress(current, total int64) {
 	barWidth := 40
 	completedWidth := int(float64(barWidth) * float64(current) / float64(total))
 	bar := strings.Repeat("=", completedWidth) + strings.Repeat(" ", barWidth-completedWidth)
-	fmt.Printf("\r  Copying... [%s] %.2f%% (%s / %s)", bar, percentage, formatBytes(current), formatBytes(total))
+	fmt.Printf("\r  Copying... [%s] %.2f%% (%s / %s)", bar, percentage, formatBytes(uint64(current)), formatBytes(uint64(total)))
 }
 
 func copyFile(src, dst string, mode os.FileMode) error {

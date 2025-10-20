@@ -60,8 +60,8 @@ func (pr *progressReader) printProgress() {
 		pr.prefix,
 		bar,
 		percentage,
-		formatBytes(pr.current),
-		formatBytes(pr.total),
+		formatBytes(uint64(pr.current)),
+		formatBytes(uint64(pr.total)),
 	)
 
 	// When download is complete, print a newline to move to the next line.
@@ -71,7 +71,7 @@ func (pr *progressReader) printProgress() {
 }
 
 // formatBytes is a helper to convert bytes to a human-readable string (KB, MB, GB).
-func formatBytes(b int64) string {
+func formatBytes(b uint64) string {
 	const unit = 1024
 	if b < unit {
 		return fmt.Sprintf("%d B", b)
