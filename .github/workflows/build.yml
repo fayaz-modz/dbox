@@ -1,0 +1,55 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y clang gcc-aarch64-linux-gnu
+
+      - name: Set up Android NDK
+        run: |
+          mkdir -p $HOME/Android/Sdk/ndk
+          wget -q https://dl.google.com/android/repository/android-ndk-r25c-linux.zip
+          unzip -q android-ndk-r25c-linux.zip -d $HOME/Android/Sdk/ndk
+          mv $HOME/Android/Sdk/ndk/android-ndk-r25c $HOME/Android/Sdk/ndk/25.1.8937393
+
+      - name: Build all targets
+        run: make all
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: dbox-binaries
+          path: bin/
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dbox-binaries
+          path: bin/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: bin/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
