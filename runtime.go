@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"syscall"
 )
@@ -19,59 +18,61 @@ func NewRuntime(cfg *Config) *Runtime {
 }
 
 func (r *Runtime) Create(containerID, bundlePath string) error {
-	containerStateDir := filepath.Join(r.cfg.RunPath, containerID)
-	consoleSocketPath := filepath.Join(containerStateDir, "console.sock")
+	parentDir := r.cfg.RunPath
+	if err := os.MkdirAll(parentDir, 0755); err != nil {
+		return fmt.Errorf("failed to create parent runtime directory '%s': %w", parentDir, err)
+	}
 
 	cmd := exec.Command(
 		r.cfg.Runtime,
 		"--root", r.cfg.RunPath,
 		"create",
 		"--bundle", bundlePath,
-		"--console-socket", consoleSocketPath,
 		containerID,
 	)
 
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		// Trim the output for a cleaner error message
-		return fmt.Errorf("%s: %w", strings.TrimSpace(string(output)), err)
+	fmt.Printf("Running runtime create command: %s\n", cmd.String())
+
+	// Use Start() and Wait() instead of CombinedOutput()
+	// This can sometimes behave differently if the command is doing strange things with stdio.
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start runtime create command: %w", err)
 	}
 
-	return nil
+	// Now wait for it to finish. This is where it will likely hang if the problem persists.
+	return cmd.Wait()
 }
 
 func (r *Runtime) Start(containerID, logPath string) error {
-	args := []string{
-		"--root", r.cfg.RunPath,
-	}
-
+	args := []string{"--root", r.cfg.RunPath}
 	if logPath != "" {
 		args = append(args, "--log", logPath, "--log-format", "json")
 	}
-
 	args = append(args, "start", containerID)
 
 	cmd := exec.Command(r.cfg.Runtime, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
-	cmd.Stdin = nil
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-
-	// Step 2: Put the process in a new session to detach it from our terminal.
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setsid: true,
+	// capture output
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to start container '%s': %v\n%s", containerID, err, string(out))
 	}
-
-	return cmd.Start()
+	return nil
 }
 
-func (r *Runtime) Stop(containerID string) error {
+func (r *Runtime) Stop(containerID string, force bool) error {
+	signal := "SIGTERM"
+	if force {
+		signal = "SIGKILL"
+	}
+
 	cmd := exec.Command(
 		r.cfg.Runtime,
 		"--root", r.cfg.RunPath,
 		"kill",
 		containerID,
-		"SIGTERM",
+		signal,
 	)
 
 	cmd.Stdout = os.Stdout
@@ -177,37 +178,28 @@ func (r *Runtime) Exec(containerID string, command []string) error {
 	return cmd.Run()
 }
 
-// --- START OF MODIFICATION ---
-
 func (r *Runtime) Run(containerID, bundlePath string, detach bool, logPath string) error {
 	// Global options that must come BEFORE the subcommand.
 	globalArgs := []string{
 		"--root", r.cfg.RunPath,
 	}
 
-	// IMPORTANT: The --log flag is for the RUNTIME's logs, not the container's stdout/stderr.
-	// We only set it if a path is provided, but it's not what captures the container output.
 	if logPath != "" {
-		// You might want a different file for runtime logs vs container output logs.
-		// For simplicity, we'll let them co-mingle for now.
 		runtimeLogPath := logPath + ".runtime"
 		globalArgs = append(globalArgs, "--log", runtimeLogPath, "--log-format", "json")
 	}
 
 	args := globalArgs
 	args = append(args, "run", "--bundle", bundlePath)
-	// We DO NOT use the runtime's --detach flag. We handle detachment ourselves.
 
 	args = append(args, containerID)
 	cmd := exec.Command(r.cfg.Runtime, args...)
 
 	if detach {
-		// --- This is the new logic for detached mode ---
 		if logPath == "" {
 			return fmt.Errorf("log path must be provided for detached mode")
 		}
 
-		// 1. Open the log file that will capture the container's stdout and stderr.
 		logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
 			return fmt.Errorf("failed to open log file for container: %w", err)
@@ -217,37 +209,25 @@ func (r *Runtime) Run(containerID, bundlePath string, detach bool, logPath strin
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
 
-		// 2. We don't connect Stdin in detached mode.
 		cmd.Stdin = nil
 
-		// 3. This is the crucial step. By setting a new session ID, the process
-		// is detached from our current terminal. When the `dbox run` command exits,
-		// this child process will not be killed. It becomes a daemon.
 		cmd.SysProcAttr = &syscall.SysProcAttr{
 			Setsid: true,
 		}
 
-		// 4. Use Start() instead of Run(). Start() begins the command and returns
-		// immediately without waiting for it to complete.
 		if err := cmd.Start(); err != nil {
 			return fmt.Errorf("failed to start container in detached mode: %w", err)
 		}
 
-		// The container is now running in the background, with its output piped to the log file.
 		return nil
 
 	} else {
-		// For foreground mode, the existing logic is correct.
-		// We connect stdio so the user can interact.
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
-		// Use Run() here because we want to block until the container exits.
 		return cmd.Run()
 	}
 }
-
-// --- END OF MODIFICATION ---
 
 func (r *Runtime) RunRaw(args []string) error {
 	finalArgs := []string{"--root", r.cfg.RunPath}
@@ -274,20 +254,4 @@ func (r *Runtime) waitForState(containerID, expectedState string) error {
 	// Simplified implementation
 	// In production, add timeout and polling
 	return nil
-}
-
-func (r *Runtime) GetContainerPID(containerID string) (int, error) {
-	stateFile := filepath.Join(r.cfg.RunPath, containerID, "state.json")
-
-	data, err := os.ReadFile(stateFile)
-	if err != nil {
-		return 0, fmt.Errorf("failed to read state file: %w", err)
-	}
-
-	// Parse PID from state JSON
-	// Simplified - should use proper JSON parsing
-	var pid int
-	fmt.Sscanf(string(data), `{"pid":%d`, &pid)
-
-	return pid, nil
 }
