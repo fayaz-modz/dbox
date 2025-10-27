@@ -52,7 +52,19 @@ func (r *Runtime) Start(containerID, logPath string) error {
 	if err != nil {
 		// If container doesn't exist in runtime, we need to recreate it
 		if strings.Contains(err.Error(), "does not exist") {
-			return fmt.Errorf("container '%s' exists but not in runtime. Use 'recreate' command to fix this", containerID)
+			fmt.Printf("DEBUG: Container '%s' not found in runtime, recreating automatically\n", containerID)
+			// Find the container bundle path
+			bundlePath := filepath.Join(r.cfg.ContainersPath, containerID)
+
+			// Create the container in runtime first
+			createCmd := exec.Command(r.cfg.Runtime, "--root", r.cfg.RunPath, "create", "--bundle", bundlePath, containerID)
+			if err := createCmd.Run(); err != nil {
+				return fmt.Errorf("failed to recreate container: %w", err)
+			}
+
+			// Now run with output capture
+			fmt.Printf("DEBUG: Running recreated container with bundle: %s, logPath: %s\n", bundlePath, logPath)
+			return r.Run(containerID, bundlePath, true, logPath)
 		}
 		return fmt.Errorf("failed to get container state: %w", err)
 	}
@@ -113,6 +125,32 @@ func (r *Runtime) Start(containerID, logPath string) error {
 }
 
 func (r *Runtime) Stop(containerID string, force bool) error {
+	// Check container state first
+	state, err := r.State(containerID)
+	if err != nil {
+		// If container doesn't exist in runtime, it's already stopped
+		if strings.Contains(err.Error(), "does not exist") {
+			fmt.Printf("DEBUG: Container '%s' not found in runtime, already stopped\n", containerID)
+			return nil
+		}
+		return fmt.Errorf("failed to get container state: %w", err)
+	}
+
+	fmt.Printf("DEBUG: Stopping container '%s' in state '%s'\n", containerID, state)
+
+	// If container is already stopped, nothing to do
+	if state == "stopped" {
+		fmt.Printf("DEBUG: Container already stopped\n")
+		return nil
+	}
+
+	// For created containers, just delete them since they're not running
+	if state == "created" {
+		fmt.Printf("DEBUG: Container is in 'created' state, deleting instead of killing\n")
+		return r.Delete(containerID, false)
+	}
+
+	// For running containers, send signal
 	signal := "SIGTERM"
 	if force {
 		signal = "SIGKILL"

@@ -540,27 +540,18 @@ func statusCmd() *cobra.Command {
 			// Get runtime state
 			state, err := rt.State(name)
 			if err != nil {
-				fmt.Printf("Container: %s\n", name)
-				fmt.Printf("Status: NOT FOUND or ERROR\n")
-				fmt.Printf("Error: %v\n", err)
-
 				// Check if it exists in filesystem
 				containerPath := filepath.Join(cfg.ContainersPath, name)
 				if _, statErr := os.Stat(containerPath); statErr == nil {
-					fmt.Println("\nNote: Container directory exists but runtime has no record.")
-					fmt.Println("This may indicate the container exited or crashed.")
-
-					// Check logs
-					logPath := filepath.Join(cfg.RunPath, "logs", name+".log")
-					if _, logErr := os.Stat(logPath); logErr == nil {
-						fmt.Printf("\nRecent logs from %s:\n", logPath)
-						fmt.Println("---")
-						tailCmd := exec.Command("tail", "-n", "20", logPath)
-						tailCmd.Stdout = os.Stdout
-						tailCmd.Run()
-					}
+					fmt.Printf("Container: %s\n", name)
+					fmt.Printf("Status: STOPPED\n")
+					return nil
+				} else {
+					fmt.Printf("Container: %s\n", name)
+					fmt.Printf("Status: NOT FOUND\n")
+					fmt.Printf("Error: %v\n", err)
+					return nil
 				}
-				return nil
 			}
 
 			fmt.Printf("Container: %s\n", name)
