@@ -3,8 +3,10 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -55,12 +57,33 @@ func (r *Runtime) Start(containerID, logPath string) error {
 		return fmt.Errorf("failed to get container state: %w", err)
 	}
 
+	fmt.Printf("DEBUG: Container '%s' state: %s\n", containerID, state)
+
 	// If container is already running, nothing to do
 	if state == "running" {
+		fmt.Printf("DEBUG: Container already running, nothing to do\n")
 		return nil
 	}
 
-	// For stopped containers, try to restart them directly first
+	// Find the container bundle path
+	bundlePath := filepath.Join(r.cfg.ContainersPath, containerID)
+
+	// For stopped or created containers, we need to delete and recreate to capture output properly
+	if state == "stopped" || state == "created" {
+		fmt.Printf("DEBUG: Container is in '%s' state, using Run() method for output capture\n", state)
+		// Delete from runtime first
+		deleteArgs := []string{"--root", r.cfg.RunPath, "delete", containerID}
+		deleteCmd := exec.Command(r.cfg.Runtime, deleteArgs...)
+		if err := deleteCmd.Run(); err != nil {
+			return fmt.Errorf("failed to delete container for restart: %w", err)
+		}
+
+		// Now run with output capture
+		fmt.Printf("DEBUG: Running container with bundle: %s, logPath: %s\n", bundlePath, logPath)
+		return r.Run(containerID, bundlePath, true, logPath)
+	}
+
+	// For created containers, use regular start
 	args := []string{"--root", r.cfg.RunPath}
 	if logPath != "" {
 		args = append(args, "--log", logPath, "--log-format", "json")
@@ -70,14 +93,21 @@ func (r *Runtime) Start(containerID, logPath string) error {
 	cmd := exec.Command(r.cfg.Runtime, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
-	// capture output
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		// If start fails for stopped containers, suggest recreate
-		if state == "stopped" {
-			return fmt.Errorf("failed to start stopped container '%s': %v\n%s\n\nUse 'dbox recreate %s' to fix this issue", containerID, err, string(out), containerID)
+	// capture runtime output to log file if provided
+	var logFile *os.File
+	if logPath != "" {
+		logFile, err = os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			return fmt.Errorf("failed to open log file for runtime output: %w", err)
 		}
-		return fmt.Errorf("failed to start container '%s': %v\n%s", containerID, err, string(out))
+		defer logFile.Close()
+		cmd.Stdout = logFile
+		cmd.Stderr = logFile
+	}
+
+	err = cmd.Run()
+	if err != nil {
+		return fmt.Errorf("failed to start container '%s': %v", containerID, err)
 	}
 	return nil
 }
@@ -206,8 +236,7 @@ func (r *Runtime) Run(containerID, bundlePath string, detach bool, logPath strin
 	}
 
 	if logPath != "" {
-		runtimeLogPath := logPath + ".runtime"
-		globalArgs = append(globalArgs, "--log", runtimeLogPath, "--log-format", "json")
+		globalArgs = append(globalArgs, "--log", logPath, "--log-format", "json")
 	}
 
 	args := globalArgs
@@ -227,6 +256,7 @@ func (r *Runtime) Run(containerID, bundlePath string, detach bool, logPath strin
 		}
 		defer logFile.Close()
 
+		fmt.Printf("DEBUG: Redirecting container output to log file: %s\n", logPath)
 		cmd.Stdout = logFile
 		cmd.Stderr = logFile
 
@@ -236,16 +266,33 @@ func (r *Runtime) Run(containerID, bundlePath string, detach bool, logPath strin
 			Setsid: true,
 		}
 
+		fmt.Printf("DEBUG: Starting detached container with command: %s\n", cmd.String())
 		if err := cmd.Start(); err != nil {
 			return fmt.Errorf("failed to start container in detached mode: %w", err)
 		}
 
+		fmt.Printf("DEBUG: Container started successfully in detached mode\n")
 		return nil
 
 	} else {
 		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+
+		// For foreground mode, capture to both console and log file
+		if logPath != "" {
+			logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+			if err != nil {
+				return fmt.Errorf("failed to open log file for container: %w", err)
+			}
+			defer logFile.Close()
+
+			// Create a multi-writer that writes to both stdout and log file
+			cmd.Stdout = io.MultiWriter(os.Stdout, logFile)
+			cmd.Stderr = io.MultiWriter(os.Stderr, logFile)
+		} else {
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+		}
+
 		return cmd.Run()
 	}
 }

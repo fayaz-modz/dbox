@@ -153,15 +153,25 @@ func (cm *ContainerManager) Run(opts *RunOptions) error {
 	}
 
 	var logPath string
+	var logger *DboxLogger
 	if opts.Detach {
 		logDir := filepath.Join(cm.cfg.RunPath, "logs")
 		if err := os.MkdirAll(logDir, 0750); err != nil {
 			return fmt.Errorf("failed to create log directory: %w", err)
 		}
 		logPath = filepath.Join(logDir, opts.Name+".log")
+		logger = NewDboxLogger(logPath)
+		defer logger.Close()
+
+		logger.Log(fmt.Sprintf("Running container '%s' from image '%s'", opts.Name, opts.Image))
 	}
 
 	err = cm.runtime.Run(opts.Name, bundlePath, opts.Detach, logPath)
+	if err != nil && logger != nil {
+		logger.Log(fmt.Sprintf("Failed to run container '%s': %v", opts.Name, err))
+	} else if logger != nil {
+		logger.Log(fmt.Sprintf("Successfully started container '%s'", opts.Name))
+	}
 	if err != nil {
 		// Since the run failed, we should clean up the assets we just created.
 		// We use the robust Delete function for this.
@@ -438,6 +448,12 @@ func (cm *ContainerManager) generateOCISpecUsingRuntime(bundlePath, imagePath, n
 }
 
 func (cm *ContainerManager) Delete(name string, force bool) error {
+	logPath := filepath.Join(cm.cfg.RunPath, "logs", name+".log")
+	logger := NewDboxLogger(logPath)
+	defer logger.Close()
+
+	logger.Log(fmt.Sprintf("Deleting container '%s' (force=%v)", name, force))
+
 	state, err := cm.runtime.State(name)
 	if err != nil {
 		if strings.Contains(err.Error(), "does not exist") {
@@ -474,6 +490,7 @@ func (cm *ContainerManager) Delete(name string, force bool) error {
 	}
 
 	fmt.Printf("Successfully deleted all assets for container '%s'.\n", name)
+	logger.Log(fmt.Sprintf("Successfully deleted container '%s'", name))
 	return nil
 }
 
@@ -710,13 +727,43 @@ func (cm *ContainerManager) Start(name string) error {
 		return fmt.Errorf("failed to create log directory: %w", err)
 	}
 	logPath := filepath.Join(logDir, name+".log")
+
+	// Reset log file for fresh start
+	if err := os.WriteFile(logPath, []byte{}, 0644); err != nil {
+		return fmt.Errorf("failed to reset log file: %w", err)
+	}
+
+	logger := NewDboxLogger(logPath)
+	defer logger.Close()
+
+	logger.Log(fmt.Sprintf("Starting container '%s'", name))
 	fmt.Printf("Starting container '%s' in background...\n", name)
 	fmt.Printf("Logs will be available at: %s\n", logPath)
-	return cm.runtime.Start(name, logPath)
+
+	err := cm.runtime.Start(name, logPath)
+	if err != nil {
+		logger.Log(fmt.Sprintf("Failed to start container '%s': %v", name, err))
+	} else {
+		logger.Log(fmt.Sprintf("Successfully started container '%s'", name))
+	}
+
+	return err
 }
 
 func (cm *ContainerManager) Stop(name string, force bool) error {
-	return cm.runtime.Stop(name, force)
+	logPath := filepath.Join(cm.cfg.RunPath, "logs", name+".log")
+	logger := NewDboxLogger(logPath)
+	defer logger.Close()
+
+	logger.Log(fmt.Sprintf("Stopping container '%s' (force=%v)", name, force))
+	err := cm.runtime.Stop(name, force)
+	if err != nil {
+		logger.Log(fmt.Sprintf("Failed to stop container '%s': %v", name, err))
+	} else {
+		logger.Log(fmt.Sprintf("Successfully stopped container '%s'", name))
+	}
+
+	return err
 }
 
 func (cm *ContainerManager) Recreate(name string) error {

@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -15,6 +16,38 @@ var (
 	configPath string
 	cfg        *Config
 )
+
+type DboxLogger struct {
+	logFile *os.File
+}
+
+func NewDboxLogger(logPath string) *DboxLogger {
+	if logPath == "" {
+		return &DboxLogger{}
+	}
+
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		return &DboxLogger{}
+	}
+
+	return &DboxLogger{logFile: logFile}
+}
+
+func (l *DboxLogger) Log(message string) {
+	if l.logFile != nil {
+		timestamp := time.Now().Format(time.RFC3339)
+		logEntry := fmt.Sprintf("[%s] DBOX: %s\n", timestamp, message)
+		l.logFile.WriteString(logEntry)
+		l.logFile.Sync()
+	}
+}
+
+func (l *DboxLogger) Close() {
+	if l.logFile != nil {
+		l.logFile.Close()
+	}
+}
 
 func main() {
 	rootCmd := &cobra.Command{
@@ -488,7 +521,10 @@ func statusCmd() *cobra.Command {
 
 			// Show log location
 			logPath := filepath.Join(cfg.RunPath, "logs", name+".log")
-			fmt.Printf("\nLog file: %s\n", logPath)
+			fmt.Printf("\nUnified log file: %s\n", logPath)
+			if _, err := os.Stat(logPath); err == nil {
+				fmt.Println("Log contains: Container output, Runtime logs, and Dbox operations")
+			}
 
 			if state == "running" {
 				fmt.Println("\nTo attach: dbox attach", name)
