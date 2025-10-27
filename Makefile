@@ -28,18 +28,20 @@ ANDROID_API_LEVEL ?= 21
 
 # --- Targets ---
 
-.PHONY: all help clean linux linux-amd64 linux-arm64 android static-musl
+.PHONY: all help clean linux linux-amd64 linux-arm64 android android-arm64 android-x86_64 static-musl
 
 help:
 	@echo "Usage: make <target>"
 	@echo ""
 	@echo "Available Targets:"
-	@echo "  all           Builds for common Linux platforms (amd64, arm64) and Android (arm64)."
+	@echo "  all           Builds for common Linux platforms (amd64, arm64) and Android (arm64, x86_64)."
 	@echo "  linux         Builds Linux binaries (amd64, arm64) using the appropriate C toolchains."
 	@echo "  linux-amd64   Builds for Linux x86_64 using clang."
 	@echo "  linux-arm64   Builds for Linux aarch64 using a cross-compiler (e.g., aarch64-linux-gnu-gcc)."
 	@echo "  static-musl   Builds a fully static, portable Linux binary (amd64) using musl-libc."
-	@echo "  android       Builds a native binary for Android aarch64 using the NDK's clang."
+	@echo "  android       Builds native binaries for Android (arm64, x86_64) using the NDK's clang."
+	@echo "  android-arm64 Builds a native binary for Android aarch64 using the NDK's clang."
+	@echo "  android-x86_64 Builds a native binary for Android x86_64 using the NDK's clang."
 	@echo "  clean         Removes the build directory ($(BINDIR))."
 	@echo ""
 	@echo "Prerequisites for 'linux-arm64':"
@@ -76,7 +78,10 @@ static-musl:
 		-o $(BINDIR)/$(EXECUTABLE)-linux-amd64-musl .
 
 # Builds a native binary for Android arm64.
-android:
+android: android-arm64 android-x86_64
+
+# Builds a native binary for Android arm64.
+android-arm64:
 ifeq ($(wildcard $(NDK_ROOT)),)
 	@echo "ERROR: Android NDK not found at '$(NDK_ROOT)'."
 	@echo "Please set the NDK_ROOT variable in the Makefile or on the command line."
@@ -87,6 +92,19 @@ endif
 	$(eval TOOLCHAIN := $(NDK_ROOT)/toolchains/llvm/prebuilt/linux-x86_64)
 	$(eval ANDROID_CC := $(TOOLCHAIN)/bin/aarch64-linux-android$(ANDROID_API_LEVEL)-clang)
 	CGO_ENABLED=1 GOOS=android GOARCH=arm64 CC=$(ANDROID_CC) go build $(LDFLAGS) -o $(BINDIR)/$(EXECUTABLE)-android-arm64 .
+
+# Builds a native binary for Android x86_64.
+android-x86_64:
+ifeq ($(wildcard $(NDK_ROOT)),)
+	@echo "ERROR: Android NDK not found at '$(NDK_ROOT)'."
+	@echo "Please set the NDK_ROOT variable in the Makefile or on the command line."
+	@exit 1
+endif
+	@echo "--> Building for Android x86_64 (using NDK clang at $(NDK_ROOT))..."
+	@mkdir -p $(BINDIR)
+	$(eval TOOLCHAIN := $(NDK_ROOT)/toolchains/llvm/prebuilt/linux-x86_64)
+	$(eval ANDROID_CC := $(TOOLCHAIN)/bin/x86_64-linux-android$(ANDROID_API_LEVEL)-clang)
+	CGO_ENABLED=1 GOOS=android GOARCH=amd64 CC=$(ANDROID_CC) go build $(LDFLAGS) -o $(BINDIR)/$(EXECUTABLE)-android-x86_64 .
 
 clean:
 	@echo "--> Cleaning up..."
