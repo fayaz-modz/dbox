@@ -62,9 +62,9 @@ func (r *Runtime) Start(containerID, logPath string) error {
 				return fmt.Errorf("failed to recreate container: %w", err)
 			}
 
-			// Now run with output capture
-			fmt.Printf("DEBUG: Running recreated container with bundle: %s, logPath: %s\n", bundlePath, logPath)
-			return r.Run(containerID, bundlePath, true, logPath)
+			// Now start the container with proper logging
+			fmt.Printf("DEBUG: Starting recreated container with bundle: %s, logPath: %s\n", bundlePath, logPath)
+			return r.startContainerWithLogging(containerID, logPath)
 		}
 		return fmt.Errorf("failed to get container state: %w", err)
 	}
@@ -80,9 +80,9 @@ func (r *Runtime) Start(containerID, logPath string) error {
 	// Find the container bundle path
 	bundlePath := filepath.Join(r.cfg.ContainersPath, containerID)
 
-	// For stopped or created containers, we need to delete and recreate to capture output properly
-	if state == "stopped" || state == "created" {
-		fmt.Printf("DEBUG: Container is in '%s' state, using Run() method for output capture\n", state)
+	// For stopped containers, we need to delete and recreate to capture output properly
+	if state == "stopped" {
+		fmt.Printf("DEBUG: Container is in 'stopped' state, using Run() method for output capture\n")
 		// Delete from runtime first
 		deleteArgs := []string{"--root", r.cfg.RunPath, "delete", containerID}
 		deleteCmd := exec.Command(r.cfg.Runtime, deleteArgs...)
@@ -354,6 +354,33 @@ func (r *Runtime) Version() (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(output)), nil
+}
+
+func (r *Runtime) startContainerWithLogging(containerID, logPath string) error {
+	args := []string{"--root", r.cfg.RunPath}
+	if logPath != "" {
+		args = append(args, "--log", logPath, "--log-format", "json")
+	}
+	args = append(args, "start", containerID)
+
+	cmd := exec.Command(r.cfg.Runtime, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+
+	// capture runtime output to log file if provided
+	if logPath != "" {
+		file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			return fmt.Errorf("failed to open log file for runtime output: %w", err)
+		}
+		defer file.Close()
+		cmd.Stdout = file
+		cmd.Stderr = file
+	}
+
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("failed to start container '%s': %v", containerID, err)
+	}
+	return nil
 }
 
 func (r *Runtime) waitForState(containerID, expectedState string) error {
