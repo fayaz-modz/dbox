@@ -114,6 +114,7 @@ func createCmd() *cobra.Command {
 		initProcess     string
 		privileged      bool
 		netNamespace    string
+		tty             bool
 	)
 
 	cmd := &cobra.Command{
@@ -137,6 +138,7 @@ func createCmd() *cobra.Command {
 				InitProcess:     initProcess,
 				Privileged:      privileged,
 				NetNamespace:    netNamespace,
+				TTY:             tty,
 			}
 
 			return cm.Create(opts)
@@ -159,6 +161,7 @@ func createCmd() *cobra.Command {
 	cmd.Flags().StringVar(&initProcess, "init", "", "Override init process (e.g., /sbin/init)")
 	cmd.Flags().BoolVar(&privileged, "privileged", false, "Run container in privileged mode")
 	cmd.Flags().StringVar(&netNamespace, "net", "host", "Network namespace (host, none, or container:name)")
+	cmd.Flags().BoolVar(&tty, "tty", false, "Allocate TTY devices (needed for some init systems)")
 	cmd.MarkFlagRequired("image")
 	cmd.MarkFlagRequired("name")
 
@@ -207,15 +210,76 @@ func stopCmd() *cobra.Command {
 }
 
 func recreateCmd() *cobra.Command {
-	return &cobra.Command{
+	var (
+		image           string
+		containerCfg    string
+		setupScript     string
+		postSetupScript string
+		envs            []string
+		noOverlayFS     bool
+		cpuQuota        int64
+		cpuPeriod       int64
+		memoryLimit     int64
+		memorySwap      int64
+		cpuShares       int64
+		blkioWeight     uint16
+		initProcess     string
+		privileged      bool
+		netNamespace    string
+		tty             bool
+	)
+
+	cmd := &cobra.Command{
 		Use:   "recreate [container-name]",
 		Short: "Recreate a container (fixes stopped containers that won't start)",
+		Long:  "Recreates a container using original settings, with optional overrides from flags",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cm := NewContainerManager(cfg)
-			return cm.Recreate(args[0])
+
+			opts := &RecreateOptions{
+				Name:            args[0],
+				Image:           image,
+				ContainerConfig: containerCfg,
+				SetupScript:     setupScript,
+				PostSetupScript: postSetupScript,
+				Envs:            envs,
+				NoOverlayFS:     noOverlayFS,
+				CPUQuota:        cpuQuota,
+				CPUPeriod:       cpuPeriod,
+				MemoryLimit:     memoryLimit,
+				MemorySwap:      memorySwap,
+				CPUShares:       cpuShares,
+				BlkioWeight:     blkioWeight,
+				InitProcess:     initProcess,
+				Privileged:      privileged,
+				NetNamespace:    netNamespace,
+				TTY:             tty,
+			}
+
+			return cm.RecreateWithOptions(opts)
 		},
 	}
+
+	// Flags
+	cmd.Flags().StringVarP(&image, "image", "i", "", "Override image (e.g., alpine:latest)")
+	cmd.Flags().StringVar(&containerCfg, "container-config", "", "Override container_config.json")
+	cmd.Flags().StringVar(&setupScript, "setup-script", "", "Override setup script to run during creation")
+	cmd.Flags().StringVar(&postSetupScript, "post-setup-script", "", "Override setup script to run after creation")
+	cmd.Flags().StringArrayVarP(&envs, "env", "e", []string{}, "Override environment variables (e.g., -e FOO=bar)")
+	cmd.Flags().BoolVar(&noOverlayFS, "no-overlayfs", false, "Override OverlayFS setting")
+	cmd.Flags().Int64Var(&cpuQuota, "cpu-quota", 0, "Override CPU quota in microseconds")
+	cmd.Flags().Int64Var(&cpuPeriod, "cpu-period", 0, "Override CPU period in microseconds")
+	cmd.Flags().Int64Var(&memoryLimit, "memory", 0, "Override memory limit in bytes")
+	cmd.Flags().Int64Var(&memorySwap, "memory-swap", 0, "Override memory+swap limit in bytes")
+	cmd.Flags().Int64Var(&cpuShares, "cpu-shares", 0, "Override CPU shares")
+	cmd.Flags().Uint16Var(&blkioWeight, "blkio-weight", 0, "Override block IO weight")
+	cmd.Flags().StringVar(&initProcess, "init", "", "Override init process")
+	cmd.Flags().BoolVar(&privileged, "privileged", false, "Override privileged mode")
+	cmd.Flags().StringVar(&netNamespace, "net", "host", "Override network namespace")
+	cmd.Flags().BoolVar(&tty, "tty", false, "Override TTY devices allocation")
+
+	return cmd
 }
 
 func deleteCmd() *cobra.Command {
@@ -279,6 +343,7 @@ func runCmd() *cobra.Command {
 		initProcess  string
 		privileged   bool
 		netNamespace string
+		tty          bool
 	)
 
 	cmd := &cobra.Command{
@@ -309,6 +374,7 @@ func runCmd() *cobra.Command {
 				InitProcess:     initProcess,
 				Privileged:      privileged,
 				NetNamespace:    netNamespace,
+				TTY:             tty,
 			}
 
 			return cm.Run(opts)
@@ -332,6 +398,7 @@ func runCmd() *cobra.Command {
 	cmd.Flags().StringVar(&initProcess, "init", "", "Override init process (e.g., /sbin/init)")
 	cmd.Flags().BoolVar(&privileged, "privileged", false, "Run container in privileged mode")
 	cmd.Flags().StringVar(&netNamespace, "net", "host", "Network namespace (host, none, or container:name)")
+	cmd.Flags().BoolVar(&tty, "tty", false, "Allocate TTY devices (needed for some init systems)")
 	cmd.MarkFlagRequired("image")
 
 	return cmd

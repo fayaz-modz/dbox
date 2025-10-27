@@ -44,6 +44,7 @@ type CreateOptions struct {
 	InitProcess     string
 	Privileged      bool
 	NetNamespace    string
+	TTY             bool
 }
 
 type RunOptions struct {
@@ -64,6 +65,27 @@ type RunOptions struct {
 	InitProcess     string
 	Privileged      bool
 	NetNamespace    string
+	TTY             bool
+}
+
+type RecreateOptions struct {
+	Name            string
+	Image           string
+	ContainerConfig string
+	SetupScript     string
+	PostSetupScript string
+	Envs            []string
+	NoOverlayFS     bool
+	CPUQuota        int64
+	CPUPeriod       int64
+	MemoryLimit     int64
+	MemorySwap      int64
+	CPUShares       int64
+	BlkioWeight     uint16
+	InitProcess     string
+	Privileged      bool
+	NetNamespace    string
+	TTY             bool
 }
 
 func NewContainerManager(cfg *Config) *ContainerManager {
@@ -364,6 +386,55 @@ func (cm *ContainerManager) generateOCISpecUsingRuntime(bundlePath, imagePath, n
 
 	ociSpec.Process.Terminal = (runOpts != nil)
 
+	// Add TTY devices only if explicitly requested via --tty flag
+	var needsTTYDevices bool
+	if opts != nil {
+		needsTTYDevices = opts.TTY
+	} else if runOpts != nil {
+		needsTTYDevices = runOpts.TTY
+	}
+
+	if needsTTYDevices {
+		if ociSpec.Linux == nil {
+			ociSpec.Linux = &spec.Linux{}
+		}
+		if ociSpec.Linux.Resources == nil {
+			ociSpec.Linux.Resources = &spec.LinuxResources{}
+		}
+		if ociSpec.Linux.Resources.Devices == nil {
+			ociSpec.Linux.Resources.Devices = []spec.LinuxDeviceCgroup{}
+		}
+
+		// Add common TTY devices that Alpine init tries to access
+		ttyDevices := []string{"tty1", "tty2", "tty3", "tty4", "tty5", "tty6"}
+		for _, tty := range ttyDevices {
+			// Add cgroup device permission
+			ociSpec.Linux.Resources.Devices = append(ociSpec.Linux.Resources.Devices, spec.LinuxDeviceCgroup{
+				Allow:  true,
+				Access: "rwm",
+				Type:   "c",
+				Major:  pointerToInt64(4),
+				Minor:  pointerToInt64(getTTYMinor(tty)),
+			})
+
+			// Add the actual device node to the spec
+			minor := getTTYMinor(tty)
+			major := int64(4)
+			fileMode := os.FileMode(0600)
+			uid := uint32(0)
+			gid := uint32(0)
+			ociSpec.Linux.Devices = append(ociSpec.Linux.Devices, spec.LinuxDevice{
+				Path:     "/dev/" + tty,
+				Type:     "c",
+				Major:    major,
+				Minor:    minor,
+				FileMode: &fileMode,
+				UID:      &uid,
+				GID:      &gid,
+			})
+		}
+	}
+
 	// Apply resource limits
 	if ociSpec.Linux == nil {
 		ociSpec.Linux = &spec.Linux{}
@@ -585,6 +656,24 @@ func generateRandomName() (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("%s_%s", adjectives[adjIndex.Int64()], nouns[nounIndex.Int64()]), nil
+}
+
+func pointerToInt64(i int64) *int64 {
+	return &i
+}
+
+func getTTYMinor(tty string) int64 {
+	// Extract the number from ttyX format
+	if len(tty) >= 4 && tty[:3] == "tty" {
+		num := tty[3:]
+		if num == "" {
+			return 0
+		}
+		var minor int64
+		fmt.Sscanf(num, "%d", &minor)
+		return minor
+	}
+	return 0
 }
 
 func (cm *ContainerManager) Create(opts *CreateOptions) error {
@@ -921,6 +1010,168 @@ func (cm *ContainerManager) Recreate(name string) error {
 	}
 
 	fmt.Printf("Container '%s' recreated successfully!\n", name)
+	return nil
+}
+
+func (cm *ContainerManager) RecreateWithOptions(opts *RecreateOptions) error {
+	fmt.Printf("Recreating container '%s' with overrides...\n", opts.Name)
+
+	// Get container path
+	containerPath := filepath.Join(cm.cfg.ContainersPath, opts.Name)
+	if _, err := os.Stat(containerPath); os.IsNotExist(err) {
+		return fmt.Errorf("container '%s' does not exist", opts.Name)
+	}
+
+	// Read metadata to get original image info (if not overridden)
+	imageName := opts.Image
+	if imageName == "" {
+		metadataPath := filepath.Join(containerPath, "metadata.json")
+		metadataData, err := os.ReadFile(metadataPath)
+		if err != nil {
+			return fmt.Errorf("failed to read container metadata: %w", err)
+		}
+
+		var metadata map[string]string
+		if err := json.Unmarshal(metadataData, &metadata); err != nil {
+			return fmt.Errorf("failed to parse container metadata: %w", err)
+		}
+
+		imageName = metadata["image"]
+		if imageName == "" {
+			return fmt.Errorf("container metadata does not contain image information")
+		}
+	}
+
+	// Stop the container if it's running
+	state, err := cm.runtime.State(opts.Name)
+	if err == nil && (state == "running" || state == "creating" || state == "paused") {
+		fmt.Printf("Stopping container '%s'...\n", opts.Name)
+		if err := cm.runtime.Stop(opts.Name, true); err != nil {
+			fmt.Printf("Warning: failed to stop container: %v\n", err)
+		}
+	}
+
+	// Read and cache original config.json BEFORE unmounting
+	originalConfigPath := filepath.Join(containerPath, "config.json")
+	originalConfigData, err := os.ReadFile(originalConfigPath)
+	if err != nil {
+		return fmt.Errorf("failed to read original config: %w", err)
+	}
+
+	var originalSpec spec.Spec
+	if err := json.Unmarshal(originalConfigData, &originalSpec); err != nil {
+		return fmt.Errorf("failed to parse original config: %w", err)
+	}
+
+	// Delete from runtime (but keep filesystem)
+	if err := cm.runtime.Delete(opts.Name, true); err != nil {
+		fmt.Printf("Warning: failed to delete from runtime: %v\n", err)
+	}
+
+	// Unmount overlayfs if mounted
+	mergedPath := filepath.Join(containerPath, "merged")
+	if _, err := os.Stat(mergedPath); err == nil {
+		if err := cm.unmountOverlayFS(containerPath); err != nil {
+			fmt.Printf("Warning: failed to unmount overlayfs: %v\n", err)
+		}
+	}
+
+	// Get rootfs source
+	rootfsSource, err := cm.imgMgr.GetRootfs(imageName)
+	if err != nil {
+		return fmt.Errorf("failed to get rootfs for image '%s': %w", imageName, err)
+	}
+
+	// Remount overlayfs
+	fmt.Println("Remounting OverlayFS...")
+	_, err = cm.mountOverlayFS(containerPath, rootfsSource)
+	if err != nil {
+		return fmt.Errorf("failed to remount overlayfs: %w", err)
+	}
+
+	// Load container config (if any)
+	containerCfg, cfgErr := LoadContainerConfig(opts.ContainerConfig)
+	if cfgErr != nil {
+		return fmt.Errorf("failed to load container config: %w", cfgErr)
+	}
+
+	// Regenerate OCI spec
+	bundlePath := containerPath
+	imagePath := filepath.Dir(rootfsSource)
+	rootPathForSpec := "merged"
+
+	// Remove existing config.json to allow regeneration
+	if _, err := os.Stat(originalConfigPath); err == nil {
+		fmt.Printf("Removing existing config.json...\n")
+		if err := os.Remove(originalConfigPath); err != nil {
+			return fmt.Errorf("failed to remove existing config.json: %w", err)
+		}
+	}
+
+	// Create options that merge original settings with overrides
+	createOpts := &CreateOptions{
+		Name:            opts.Name,
+		Image:           imageName,
+		ContainerConfig: opts.ContainerConfig,
+		SetupScript:     opts.SetupScript,
+		PostSetupScript: opts.PostSetupScript,
+		Envs:            opts.Envs,
+		NoOverlayFS:     opts.NoOverlayFS,
+		CPUQuota:        opts.CPUQuota,
+		CPUPeriod:       opts.CPUPeriod,
+		MemoryLimit:     opts.MemoryLimit,
+		MemorySwap:      opts.MemorySwap,
+		CPUShares:       opts.CPUShares,
+		BlkioWeight:     opts.BlkioWeight,
+		InitProcess:     opts.InitProcess,
+		Privileged:      opts.Privileged,
+		NetNamespace:    opts.NetNamespace,
+		TTY:             opts.TTY,
+	}
+
+	// If privileged is not explicitly set, try to preserve from original
+	if !opts.Privileged {
+		if originalSpec.Process != nil && originalSpec.Process.Capabilities != nil {
+			privilegedCaps := []string{"CAP_SYS_ADMIN", "CAP_NET_ADMIN", "CAP_SYS_MODULE",
+				"CAP_DAC_READ_SEARCH", "CAP_SYS_RAWIO", "CAP_SYS_TIME",
+				"CAP_AUDIT_CONTROL", "CAP_MAC_ADMIN", "CAP_MAC_OVERRIDE"}
+			hasPrivilegedCaps := false
+			for _, cap := range originalSpec.Process.Capabilities.Permitted {
+				for _, privCap := range privilegedCaps {
+					if cap == privCap {
+						hasPrivilegedCaps = true
+						break
+					}
+				}
+				if hasPrivilegedCaps {
+					break
+				}
+			}
+			createOpts.Privileged = hasPrivilegedCaps
+		}
+	}
+
+	// If init process is not explicitly set, try to preserve from original
+	if opts.InitProcess == "" {
+		if originalSpec.Process != nil && len(originalSpec.Process.Args) > 0 {
+			if originalSpec.Process.Args[0] != "/bin/sh" && originalSpec.Process.Args[0] != "/bin/bash" {
+				createOpts.InitProcess = originalSpec.Process.Args[0]
+			}
+		}
+	}
+
+	fmt.Println("Regenerating OCI config...")
+	if err := cm.generateOCISpecUsingRuntime(bundlePath, imagePath, opts.Name, createOpts, nil, containerCfg, rootPathForSpec); err != nil {
+		return fmt.Errorf("failed to regenerate OCI spec: %w", err)
+	}
+
+	// Recreate in runtime
+	fmt.Println("Recreating OCI container...")
+	if err := cm.runtime.Create(opts.Name, bundlePath); err != nil {
+		return fmt.Errorf("failed to recreate container: %w", err)
+	}
+
+	fmt.Printf("Container '%s' recreated successfully!\n", opts.Name)
 	return nil
 }
 
