@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 	"syscall"
+	"time"
 )
 
 type Runtime struct {
@@ -44,6 +45,22 @@ func (r *Runtime) Create(containerID, bundlePath string) error {
 }
 
 func (r *Runtime) Start(containerID, logPath string) error {
+	// Check container state first
+	state, err := r.State(containerID)
+	if err != nil {
+		// If container doesn't exist in runtime, we need to recreate it
+		if strings.Contains(err.Error(), "does not exist") {
+			return fmt.Errorf("container '%s' exists but not in runtime. Use 'recreate' command to fix this", containerID)
+		}
+		return fmt.Errorf("failed to get container state: %w", err)
+	}
+
+	// If container is already running, nothing to do
+	if state == "running" {
+		return nil
+	}
+
+	// For stopped containers, try to restart them directly first
 	args := []string{"--root", r.cfg.RunPath}
 	if logPath != "" {
 		args = append(args, "--log", logPath, "--log-format", "json")
@@ -56,6 +73,10 @@ func (r *Runtime) Start(containerID, logPath string) error {
 	// capture output
 	out, err := cmd.CombinedOutput()
 	if err != nil {
+		// If start fails for stopped containers, suggest recreate
+		if state == "stopped" {
+			return fmt.Errorf("failed to start stopped container '%s': %v\n%s\n\nUse 'dbox recreate %s' to fix this issue", containerID, err, string(out), containerID)
+		}
 		return fmt.Errorf("failed to start container '%s': %v\n%s", containerID, err, string(out))
 	}
 	return nil
@@ -251,7 +272,35 @@ func (r *Runtime) Version() (string, error) {
 }
 
 func (r *Runtime) waitForState(containerID, expectedState string) error {
-	// Simplified implementation
-	// In production, add timeout and polling
-	return nil
+	const (
+		maxRetries   = 30
+		pollInterval = 1 * time.Second
+		timeout      = 30 * time.Second
+	)
+
+	start := time.Now()
+
+	for i := 0; i < maxRetries; i++ {
+		state, err := r.State(containerID)
+		if err != nil {
+			// If container doesn't exist anymore, consider it stopped
+			if strings.Contains(err.Error(), "does not exist") && expectedState == "stopped" {
+				return nil
+			}
+			return fmt.Errorf("failed to get container state: %w", err)
+		}
+
+		if state == expectedState {
+			return nil
+		}
+
+		// Check timeout
+		if time.Since(start) > timeout {
+			return fmt.Errorf("timeout waiting for container '%s' to reach state '%s' (current: '%s')", containerID, expectedState, state)
+		}
+
+		time.Sleep(pollInterval)
+	}
+
+	return fmt.Errorf("container '%s' did not reach state '%s' after %d retries", containerID, expectedState, maxRetries)
 }

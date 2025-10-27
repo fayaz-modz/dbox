@@ -17,9 +17,10 @@ type Config struct {
 }
 
 type ContainerConfig struct {
-	Mounts []Mount `json:"mounts,omitempty"`
-	SSH    *SSH    `json:"ssh,omitempty"`
-	User   *User   `json:"user,omitempty"`
+	Mounts    []Mount    `json:"mounts,omitempty"`
+	SSH       *SSH       `json:"ssh,omitempty"`
+	User      *User      `json:"user,omitempty"`
+	Resources *Resources `json:"resources,omitempty"`
 }
 
 type Mount struct {
@@ -39,6 +40,15 @@ type User struct {
 	Password string `json:"password,omitempty"`
 	Wheel    bool   `json:"wheel"`
 	Sudo     bool   `json:"sudo"`
+}
+
+type Resources struct {
+	CPUQuota    int64  `json:"cpu_quota,omitempty"`    // CPU quota in microseconds
+	CPUPeriod   int64  `json:"cpu_period,omitempty"`   // CPU period in microseconds
+	MemoryLimit int64  `json:"memory_limit,omitempty"` // Memory limit in bytes
+	MemorySwap  int64  `json:"memory_swap,omitempty"`  // Memory+swap limit in bytes
+	CPUShares   int64  `json:"cpu_shares,omitempty"`   // CPU shares (relative weight)
+	BlkioWeight uint16 `json:"blkio_weight,omitempty"` // Block IO weight
 }
 
 func LoadConfig(path string) (*Config, error) {

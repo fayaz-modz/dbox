@@ -1,5 +1,3 @@
-
-
 # dbox - Container Management Tool
 
 [![Build Status](https://img.shields.io/github/workflow/status/yourusername/dbox/CI)](https://github.com/yourusername/dbox/actions)
@@ -19,6 +17,11 @@ A lightweight distrobox-like container management tool written in Go that provid
 - 📋 YAML or JSON configuration
 - 📱 Native Android support
 - 🔒 Static binary builds for enhanced security
+- 🔧 **NEW**: Custom init process support (e.g., `/sbin/init`)
+- 🔒 **NEW**: Privileged container mode with full capabilities
+- 🌐 **NEW**: Network namespace control (host, none, container)
+- 💾 **NEW**: Full container mutability options
+- 🔄 **NEW**: Container recreate command for fixing stopped containers
 
 ## Table of Contents
 
@@ -26,6 +29,7 @@ A lightweight distrobox-like container management tool written in Go that provid
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [Usage](#usage)
+- [Advanced Features](#advanced-features)
 - [Examples](#examples)
 - [Building](#building)
 - [Comparison with Similar Tools](#comparison-with-similar-tools)
@@ -43,7 +47,7 @@ dbox pull alpine:latest
 # Create and run a container
 dbox run -i alpine:latest -n my-container
 
-# Execute commands in the container
+# Execute commands in container
 dbox exec my-container /bin/sh
 ```
 
@@ -57,7 +61,7 @@ dbox exec my-container /bin/sh
 
 ### From Binary
 
-Download the latest binary from the [Releases](https://github.com/yourusername/dbox/releases) page.
+Download latest binary from [Releases](https://github.com/yourusername/dbox/releases) page.
 
 ### From Source
 
@@ -71,7 +75,7 @@ sudo mv dbox /usr/local/bin/
 
 ### For Android
 
-1. Download the Android binary from releases
+1. Download Android binary from releases
 2. Push to device:
    ```bash
    adb push dbox-android-arm64 /data/local/tmp/dbox
@@ -131,12 +135,17 @@ dbox ls
 # Start a container
 dbox start my-alpine
 
+
+
 # Execute commands in a container
 dbox exec my-alpine /bin/sh
 dbox exec my-alpine apk add vim
 
 # Stop a container
 dbox stop my-alpine
+
+# Recreate a container (fixes stopped containers, preserves data)
+dbox recreate my-alpine
 
 # Delete a container
 dbox delete my-alpine
@@ -171,9 +180,133 @@ dbox clean
 # Run raw runtime commands
 dbox raw list
 dbox raw state my-container
+
+# Check container status
+dbox status my-container
+
+# Recreate container (fixes stopped containers)
+dbox recreate my-container
+```
+
+## Advanced Features
+
+### Custom Init Process
+
+Override the default container init process:
+
+```bash
+# Run with /sbin/init instead of image default
+dbox create -i alpine -n alpine-init --init /sbin/init
+dbox start alpine-init
+dbox exec alpine-init ps aux  # PID 1 should be /sbin/init
+
+# Use with run command
+dbox run -i alpine -n test --init /sbin/init
+```
+
+### Privileged Containers
+
+Run containers with full system capabilities:
+
+```bash
+# Create privileged container
+dbox create -i alpine -n privileged-alpine --privileged
+dbox start privileged-alpine
+
+# Check capabilities
+dbox exec privileged-alpine capsh --print
+
+# Mount host filesystems
+dbox exec privileged-alpine mount -t proc proc /proc
+```
+
+### Network Namespace Control
+
+Control container network isolation:
+
+```bash
+# Share host network (default)
+dbox create -i alpine -n host-net --net host
+
+# Isolated network namespace
+dbox create -i alpine -n isolated-net --net none
+
+# Share network with another container
+dbox create -i alpine -n shared-net --net container:other-container
+```
+
+### Full Container Mutability
+
+Choose between overlayfs (default) or full filesystem copy:
+
+```bash
+# Use overlayfs (default, efficient)
+dbox create -i alpine -n overlay-container
+
+# Full filesystem copy (slower but fully mutable)
+dbox create -i alpine -n mutable-container --no-overlayfs
+
+# Changes persist across restarts with overlayfs upper layer
+# For complete persistence, use --no-overlayfs
+```
+
+### Resource Limits
+
+Control container resource usage:
+
+```bash
+# CPU limits (50% of one CPU core)
+dbox create -i alpine -n cpu-limited --cpu-quota 50000 --cpu-period 100000
+
+# Memory limits (512MB)
+dbox create -i alpine -n mem-limited --memory 512m
+
+# CPU shares (relative weight)
+dbox create -i alpine -n cpu-shares --cpu-shares 2048
+
+# Block IO weight
+dbox create -i alpine -n io-weight --blkio-weight 500
+```
+
+### Combined Advanced Usage
+
+```bash
+# Full system container with init, privileged, host networking
+dbox create -i alpine -n system-container \
+  --init /sbin/init \
+  --privileged \
+  --net host \
+  --no-overlayfs
+
+# Development environment with resource limits
+dbox create -i ubuntu:22.04 -n dev-env \
+  --init /sbin/init \
+  --net host \
+  --memory 2g \
+  --cpu-shares 1024 \
+  -v ~/projects:/workspace \
+  -e EDITOR=vim
 ```
 
 ## Examples
+
+### System Container with Full Capabilities
+
+```bash
+# Create a system-like container
+dbox create -i alpine -n system \
+  --init /sbin/init \
+  --privileged \
+  --net host \
+  --no-overlayfs
+
+dbox start system
+
+# Verify it's running like a real system
+dbox exec system ps aux
+dbox exec system systemctl status  # if systemd is available
+dbox exec system ip addr show       # shows host network interfaces
+```
 
 ### Development Environment
 
@@ -207,17 +340,47 @@ dbox exec dev /bin/bash
 ### Penetration Testing Environment
 
 ```bash
-# Create a Kali container for security testing
+# Create a privileged Kali container for security testing
 dbox pull kali
-dbox run -i kali:latest -n pentest
+dbox create -i kali:latest -n pentest --privileged --net host
+dbox start pentest
 dbox exec pentest /bin/bash
+
+# Now you have full system access for security testing
+dbox exec pentest nmap -sS localhost
+dbox exec pentest tcpdump -i any
 ```
 
 ### Database Container
 
 ```bash
-# Run a PostgreSQL container
-dbox run -i postgres:14 -n db -e POSTGRES_PASSWORD=mypassword -v pgdata:/var/lib/postgresql/data
+# Run a PostgreSQL container with resource limits
+dbox run -i postgres:14 -n db \
+  -e POSTGRES_PASSWORD=mypassword \
+  -v pgdata:/var/lib/postgresql/data \
+  --memory 1g \
+  --cpu-shares 512
+```
+
+### Minimal Container with Custom Init
+
+```bash
+# Create minimal container with custom init script
+cat > custom-init.sh << 'EOF'
+#!/bin/sh
+echo "Custom init starting..."
+# Your custom initialization here
+exec /bin/sh
+EOF
+
+chmod +x custom-init.sh
+
+dbox create -i alpine -n minimal \
+  --init /bin/sh \
+  -v $(pwd)/custom-init.sh:/custom-init.sh
+
+dbox start minimal
+dbox exec minimal /custom-init.sh
 ```
 
 ## Building
@@ -239,7 +402,7 @@ go build -o dbox
 
 ### Cross-Platform Builds
 
-Use the provided Makefile for easy cross-compilation:
+Use provided Makefile for easy cross-compilation:
 
 ```bash
 # Build for common platforms
@@ -282,6 +445,10 @@ CGO_ENABLED=1 GOOS=android GOARCH=arm64 go build -ldflags="-s -w" -o dbox-androi
 | Static Binary | ✓ | ✗ | ✗ | ✗ |
 | Setup Scripts | ✓ | ✓ | ✗ | Limited |
 | Custom Mounts | ✓ | ✓ | ✓ | ✓ |
+| Custom Init | ✓ | ✗ | Limited | Limited |
+| Privileged Mode | ✓ | ✓ | ✓ | ✓ |
+| Network Control | ✓ | ✓ | ✓ | ✓ |
+| Resource Limits | ✓ | Limited | ✓ | ✓ |
 
 ## Container Config Reference
 
@@ -306,8 +473,93 @@ The `container_config.json` supports:
     "password": "mypassword",  // optional
     "wheel": true,  // add to wheel group
     "sudo": true    // enable passwordless sudo
+  },
+  "resources": {
+    "cpu_quota": 50000,        // CPU quota in microseconds
+    "cpu_period": 100000,      // CPU period in microseconds
+    "memory_limit": 536870912, // Memory limit in bytes (512MB)
+    "memory_swap": 1073741824, // Memory+swap limit in bytes (1GB)
+    "cpu_shares": 1024,        // CPU shares (relative weight)
+    "blkio_weight": 500        // Block IO weight (10-1000)
   }
 }
+```
+
+## Command Reference
+
+### Global Flags
+
+- `-c, --config`: Path to config file (or set `DBOX_CONFIG` env)
+- `-h, --help`: Show help
+- `--version`: Show version
+
+### Create Command
+
+```bash
+dbox create [flags]
+
+Required:
+  -i, --image string        Image to use (e.g., alpine:latest)
+  -n, --name string         Container name
+
+Optional:
+  --container-config string  Path to container_config.json
+  --setup-script string      Setup script to run during creation
+  --post-setup-script string Setup script to run after creation
+  -e, --env strings         Set environment variables
+  --no-overlayfs           Disable OverlayFS and copy rootfs
+  --init string            Override init process (e.g., /sbin/init)
+  --privileged             Run container in privileged mode
+  --net string            Network namespace (host, none, or container:name)
+  --cpu-quota int64       CPU quota in microseconds
+  --cpu-period int64      CPU period in microseconds
+  --memory int64          Memory limit in bytes
+  --memory-swap int64     Memory+swap limit in bytes
+  --cpu-shares int64      CPU shares (relative weight)
+  --blkio-weight uint16   Block IO weight
+```
+
+### Run Command
+
+```bash
+dbox run [flags]
+
+Required:
+  -i, --image string        Image to use (e.g., ubuntu:latest)
+
+Optional:
+  -n, --name string         Assign a name to the container
+  --container-config string  Path to container_config.json
+  -e, --env strings         Set environment variables
+  -d, --detach             Run container in background
+  --rm                     Auto-remove container when it exits
+  -v, --volume strings     Bind mount volumes
+  --no-overlayfs           Disable OverlayFS and copy rootfs
+  --init string            Override init process
+  --privileged             Run container in privileged mode
+  --net string            Network namespace
+  --cpu-quota int64       CPU quota in microseconds
+  --cpu-period int64      CPU period in microseconds
+  --memory int64          Memory limit in bytes
+  --memory-swap int64     Memory+swap limit in bytes
+  --cpu-shares int64      CPU shares (relative weight)
+  --blkio-weight uint16   Block IO weight
+```
+
+### Other Commands
+
+```bash
+dbox list                    # List containers
+dbox start <container>       # Start container
+dbox stop <container>        # Stop container
+dbox recreate <container>    # Recreate container (fixes stopped containers)
+dbox delete <container>      # Delete container
+dbox exec <container> <cmd>  # Execute command
+dbox pull <image>           # Pull image
+dbox logs <container>        # Show logs
+dbox info                   # Show configuration
+dbox clean                  # Clean image cache
+dbox raw <args>             # Run raw runtime commands
 ```
 
 ## Environment Variables
@@ -328,6 +580,9 @@ The `container_config.json` supports:
 │   ├── bundle/
 │   │   ├── config.json
 │   │   └── rootfs/
+│   ├── upper/           # OverlayFS upper layer (if using overlay)
+│   ├── work/            # OverlayFS work directory
+│   ├── merged/          # OverlayFS mount point
 │   └── metadata.json
 ```
 
@@ -348,6 +603,125 @@ Check runtime status:
 ```bash
 dbox info
 dbox raw state my-container
+dbox status my-container
+```
+
+### Init Process Issues
+
+If `/sbin/init` fails to start:
+
+```bash
+# Check if init exists in the image
+dbox exec my-container ls -la /sbin/init
+
+# Try alternative init systems
+dbox create -i alpine -n test --init /bin/sh
+dbox create -i ubuntu -n test --init /lib/systemd/systemd
+```
+
+### Privileged Container Issues
+
+If privileged mode doesn't work:
+
+```bash
+# Check runtime supports privileged mode
+dbox info
+
+# Verify capabilities
+dbox exec privileged-container capsh --print
+
+# Check if seccomp is disabled
+dbox exec privileged-container cat /proc/self/status | grep Seccomp
+```
+
+### Network Problems
+
+If networking doesn't work:
+
+```bash
+# Try different network modes
+dbox create -i alpine -n test --net host
+dbox create -i alpine -n test --net none
+
+# Check network interfaces
+dbox exec test ip addr show
+dbox exec test cat /proc/net/dev
+```
+
+### OverlayFS Issues
+
+If you're on a filesystem without OverlayFS support:
+
+```bash
+dbox run -i alpine -n test --no-overlayfs
+```
+
+### Container Lifecycle Management
+
+dbox provides robust container lifecycle management with data preservation:
+
+```bash
+# Normal workflow
+dbox create -i alpine -n my-container
+dbox start my-container
+# ... use container ...
+dbox stop my-container
+dbox start my-container  # Works normally
+
+# If container won't start after being stopped
+dbox recreate my-container  # Fixes the issue, preserves data
+dbox start my-container      # Now works again
+```
+
+### Container Issues
+
+If containers have issues:
+
+```bash
+# First try - recreate (preserves data)
+dbox recreate my-container
+
+# Last resort - delete and recreate (loses data)
+dbox delete my-container -f
+dbox create -i alpine -n my-container
+```
+
+**Data Persistence:**
+
+- **`recreate`**: Preserves all container data and configuration
+- **`delete`**: Completely removes the container including all data
+
+### Recreate Command
+
+The `recreate` command fixes containers that won't start after being stopped:
+
+```bash
+# When a container fails to start with this error:
+# "failed to start stopped container 'name': container 'name' is not running"
+
+# Use recreate to fix it:
+dbox recreate my-container
+
+# Recreate does:
+# 1. Stops container if running
+# 2. Deletes from runtime (preserves filesystem)
+# 3. Unmounts and remounts OverlayFS
+# 4. Regenerates OCI config with original settings
+# 5. Recreates container in runtime
+# 6. Preserves all data in upper layer
+```
+
+### Resource Limit Issues
+
+If containers don't respect resource limits:
+
+```bash
+# Check if cgroups v2 is available
+mount | grep cgroup
+
+# Verify limits are applied
+dbox exec limited-container cat /sys/fs/cgroup/memory.max
+dbox exec limited-container cat /sys/fs/cgroup/cpu.max
 ```
 
 ### Network Errors on Android
@@ -360,19 +734,11 @@ If you encounter DNS resolution errors on Android:
 
 ### Image Pull Fails
 
-Check network connectivity and try specifying the full image reference:
+Check network connectivity and try specifying full image reference:
 
 ```bash
 ping docker.io
 dbox pull docker.io/library/alpine:latest
-```
-
-### OverlayFS Issues
-
-If you're on a filesystem without OverlayFS support:
-
-```bash
-dbox run -i alpine -n test --no-overlayfs
 ```
 
 ## Project Status
@@ -384,9 +750,17 @@ dbox is currently in **beta**. It's functional for basic container operations bu
 - [x] Configuration management
 - [x] Android support
 - [x] Static binary builds
-- [ ] Container networking
+- [x] Custom init process support
+- [x] Privileged container mode
+- [x] Network namespace control
+- [x] Resource limits
+- [x] Container mutability options
+- [x] Container recreate functionality
+- [ ] Container networking (advanced)
 - [ ] Container updates
 - [ ] GUI interface
+- [ ] Container snapshots
+- [ ] Multi-architecture image support
 
 ## Contributing
 
@@ -403,7 +777,7 @@ go test ./...
 
 ### Code Style
 
-This project follows the Go standard formatting and linting guidelines. Please run `gofmt` and `golint` before submitting pull requests.
+This project follows Go standard formatting and linting guidelines. Please run `gofmt` and `golint` before submitting pull requests.
 
 ### Reporting Issues
 
@@ -411,10 +785,11 @@ Please report bugs and feature requests on the [Issues](https://github.com/youru
 
 ## License
 
-MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Acknowledgments
 
 - Inspired by [distrobox](https://github.com/89luca89/distrobox)
 - Uses [go-containerregistry](https://github.com/google/go-containerregistry) for image operations
 - Built with [cobra](https://github.com/spf13/cobra) for CLI interface
+- OCI runtime support via [crun](https://github.com/containers/crun) and [runc](https://github.com/opencontainers/runc)

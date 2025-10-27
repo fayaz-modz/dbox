@@ -50,13 +50,13 @@ func (pr *progressReader) printProgress() {
 	}
 
 	percentage := float64(pr.current) / float64(pr.total) * 100
-	barWidth := 40
+	barWidth := 30
 	completedWidth := int(float64(barWidth) * (float64(pr.current) / float64(pr.total)))
 
-	bar := strings.Repeat("=", completedWidth) + strings.Repeat(" ", barWidth-completedWidth)
+	bar := strings.Repeat("█", completedWidth) + strings.Repeat("░", barWidth-completedWidth)
 
 	// Use carriage return `\r` to stay on the same line.
-	fmt.Printf("\r%s [%s] %.2f%% (%s / %s)",
+	fmt.Printf("\r%s [%s] %.1f%% (%s / %s)",
 		pr.prefix,
 		bar,
 		percentage,

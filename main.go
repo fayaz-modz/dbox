@@ -45,6 +45,7 @@ func main() {
 		startCmd(),
 		statusCmd(),
 		stopCmd(),
+		recreateCmd(),
 		deleteCmd(),
 		execCmd(),
 		pullCmd(),
@@ -71,6 +72,15 @@ func createCmd() *cobra.Command {
 		postSetupScript string
 		envs            []string
 		noOverlayFS     bool
+		cpuQuota        int64
+		cpuPeriod       int64
+		memoryLimit     int64
+		memorySwap      int64
+		cpuShares       int64
+		blkioWeight     uint16
+		initProcess     string
+		privileged      bool
+		netNamespace    string
 	)
 
 	cmd := &cobra.Command{
@@ -85,6 +95,15 @@ func createCmd() *cobra.Command {
 				ContainerConfig: containerCfg,
 				SetupScript:     setupScript,
 				PostSetupScript: postSetupScript,
+				CPUQuota:        cpuQuota,
+				CPUPeriod:       cpuPeriod,
+				MemoryLimit:     memoryLimit,
+				MemorySwap:      memorySwap,
+				CPUShares:       cpuShares,
+				BlkioWeight:     blkioWeight,
+				InitProcess:     initProcess,
+				Privileged:      privileged,
+				NetNamespace:    netNamespace,
 			}
 
 			return cm.Create(opts)
@@ -98,6 +117,15 @@ func createCmd() *cobra.Command {
 	cmd.Flags().StringVar(&postSetupScript, "post-setup-script", "", "Setup script to run after creation")
 	cmd.Flags().StringArrayVarP(&envs, "env", "e", []string{}, "Set environment variables (e.g., -e FOO=bar)")
 	cmd.Flags().BoolVar(&noOverlayFS, "no-overlayfs", false, "Disable OverlayFS and copy the rootfs (slower, but works on filesystems without overlay support)")
+	cmd.Flags().Int64Var(&cpuQuota, "cpu-quota", 0, "CPU quota in microseconds (e.g., 50000 for 5% CPU)")
+	cmd.Flags().Int64Var(&cpuPeriod, "cpu-period", 0, "CPU period in microseconds (default 100000)")
+	cmd.Flags().Int64Var(&memoryLimit, "memory", 0, "Memory limit in bytes (e.g., 512m, 1g)")
+	cmd.Flags().Int64Var(&memorySwap, "memory-swap", 0, "Memory+swap limit in bytes")
+	cmd.Flags().Int64Var(&cpuShares, "cpu-shares", 0, "CPU shares (relative weight, 1024 default)")
+	cmd.Flags().Uint16Var(&blkioWeight, "blkio-weight", 0, "Block IO weight (10-1000)")
+	cmd.Flags().StringVar(&initProcess, "init", "", "Override init process (e.g., /sbin/init)")
+	cmd.Flags().BoolVar(&privileged, "privileged", false, "Run container in privileged mode")
+	cmd.Flags().StringVar(&netNamespace, "net", "host", "Network namespace (host, none, or container:name)")
 	cmd.MarkFlagRequired("image")
 	cmd.MarkFlagRequired("name")
 
@@ -143,6 +171,18 @@ func stopCmd() *cobra.Command {
 
 	cmd.Flags().BoolVarP(&force, "force", "f", false, "Force stop the container")
 	return cmd
+}
+
+func recreateCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "recreate [container-name]",
+		Short: "Recreate a container (fixes stopped containers that won't start)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cm := NewContainerManager(cfg)
+			return cm.Recreate(args[0])
+		},
+	}
 }
 
 func deleteCmd() *cobra.Command {
@@ -197,6 +237,15 @@ func runCmd() *cobra.Command {
 		autoRemove   bool
 		volumes      []string
 		noOverlayFS  bool
+		cpuQuota     int64
+		cpuPeriod    int64
+		memoryLimit  int64
+		memorySwap   int64
+		cpuShares    int64
+		blkioWeight  uint16
+		initProcess  string
+		privileged   bool
+		netNamespace string
 	)
 
 	cmd := &cobra.Command{
@@ -218,6 +267,15 @@ func runCmd() *cobra.Command {
 				Detach:          detach,
 				AutoRemove:      autoRemove,
 				NoOverlayFS:     noOverlayFS,
+				CPUQuota:        cpuQuota,
+				CPUPeriod:       cpuPeriod,
+				MemoryLimit:     memoryLimit,
+				MemorySwap:      memorySwap,
+				CPUShares:       cpuShares,
+				BlkioWeight:     blkioWeight,
+				InitProcess:     initProcess,
+				Privileged:      privileged,
+				NetNamespace:    netNamespace,
 			}
 
 			return cm.Run(opts)
@@ -232,6 +290,15 @@ func runCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&autoRemove, "rm", false, "Automatically remove the container when it exits (only in foreground mode)")
 	cmd.Flags().StringArrayVarP(&volumes, "volume", "v", []string{}, "Bind mount a volume (e.g., /host/path:/container/path)")
 	cmd.Flags().BoolVar(&noOverlayFS, "no-overlayfs", false, "Disable OverlayFS and copy the rootfs (slower, but works on filesystems without overlay support)")
+	cmd.Flags().Int64Var(&cpuQuota, "cpu-quota", 0, "CPU quota in microseconds (e.g., 50000 for 5% CPU)")
+	cmd.Flags().Int64Var(&cpuPeriod, "cpu-period", 0, "CPU period in microseconds (default 100000)")
+	cmd.Flags().Int64Var(&memoryLimit, "memory", 0, "Memory limit in bytes (e.g., 512m, 1g)")
+	cmd.Flags().Int64Var(&memorySwap, "memory-swap", 0, "Memory+swap limit in bytes")
+	cmd.Flags().Int64Var(&cpuShares, "cpu-shares", 0, "CPU shares (relative weight, 1024 default)")
+	cmd.Flags().Uint16Var(&blkioWeight, "blkio-weight", 0, "Block IO weight (10-1000)")
+	cmd.Flags().StringVar(&initProcess, "init", "", "Override init process (e.g., /sbin/init)")
+	cmd.Flags().BoolVar(&privileged, "privileged", false, "Run container in privileged mode")
+	cmd.Flags().StringVar(&netNamespace, "net", "host", "Network namespace (host, none, or container:name)")
 	cmd.MarkFlagRequired("image")
 
 	return cmd
