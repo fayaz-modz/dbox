@@ -24,6 +24,7 @@ A lightweight distrobox-like container management tool written in Go that provid
 - 🔄 **NEW**: Container recreate command for fixing stopped containers
 - 🖥️ **NEW**: TTY device allocation for init systems (`--tty` flag)
 - ⚙️ **NEW**: Enhanced recreate command with full override support
+- 📊 **NEW**: Container resource usage monitoring with CPU percentage, memory, PID, and cgroups info
 
 ## Table of Contents
 
@@ -186,6 +187,12 @@ dbox raw state my-container
 # Check container status
 dbox status my-container
 
+# Monitor container resource usage
+dbox usage my-container
+dbox usage my-container --pid      # Show PID information
+dbox usage my-container --cgroup   # Show detailed cgroups info
+dbox usage my-container --pid --cgroup  # Show all information
+
 # Recreate container (fixes stopped containers)
 dbox recreate my-container
 
@@ -347,6 +354,50 @@ dbox recreate my-container \
 4. Stops and recreates the container with new settings
 5. Preserves container data and filesystem changes
 
+### Container Resource Usage Monitoring
+
+Monitor running container resource consumption:
+
+```bash
+# Basic CPU and memory usage
+dbox usage my-container
+
+# Show PID information
+dbox usage my-container --pid
+
+# Show detailed cgroups information
+dbox usage my-container --cgroup
+
+# Show all available information
+dbox usage my-container --pid --cgroup
+```
+
+**What the usage command shows:**
+- **CPU Usage**: Total CPU time consumed by the container with current usage percentage
+- **Memory Usage**: Current memory consumption (in MB)
+- **PID**: Container process ID (when `--pid` flag is used)
+- **Cgroup Info**: Detailed cgroups settings including limits and current values (when `--cgroup` flag is used)
+
+**Example output:**
+```
+Container: my-container
+CPU Usage: 12.34 seconds (5.67%)
+Memory Usage: 256.78 MB
+PID: 12345
+Cgroup Path: /sys/fs/cgroup/.../my-container
+CPU Max: max 100000
+Memory Max: unlimited
+PIDs Current: 1
+PIDs Max: max
+```
+
+**CPU Percentage Calculation:**
+The CPU percentage is calculated as: `(usage_time / elapsed_time) * 100 / cpu_count`
+- Takes into account CPU limits set on the container
+- Shows current utilization relative to available CPU resources
+- Capped at 100% to avoid unrealistic values
+- Automatically detects number of CPU cores available to the container
+
 ### Combined Advanced Usage
 
 ```bash
@@ -372,6 +423,14 @@ dbox create -i alpine -n alpine-system \
   --tty \
   --privileged \
   --net host
+
+# Monitor resource usage of running containers
+dbox usage system-container --pid --cgroup
+dbox usage dev-env --cgroup
+
+# Check CPU utilization percentage
+dbox usage my-container  # Shows CPU time with percentage
+dbox usage dev-env        # Monitor development container performance
 ```
 
 ## Examples
@@ -535,6 +594,7 @@ CGO_ENABLED=1 GOOS=android GOARCH=arm64 go build -ldflags="-s -w" -o dbox-androi
 | Privileged Mode | ✓ | ✓ | ✓ | ✓ |
 | Network Control | ✓ | ✓ | ✓ | ✓ |
 | Resource Limits | ✓ | Limited | ✓ | ✓ |
+| Usage Monitoring | ✓ | ✗ | ✓ | ✓ |
 
 ## Container Config Reference
 
@@ -656,6 +716,15 @@ dbox recreate <container> [flags]
   --cpu-shares int64           Override CPU shares
   --blkio-weight uint16        Override block IO weight
   --tty                        Override TTY device allocation
+```
+
+### Usage Command
+
+```bash
+dbox usage <container>       # Show CPU (with percentage) and memory usage
+dbox usage <container> --pid      # Show PID information
+dbox usage <container> --cgroup   # Show detailed cgroups information
+dbox usage <container> --pid --cgroup  # Show all information
 ```
 
 ### Other Commands
@@ -853,6 +922,27 @@ dbox exec limited-container cat /sys/fs/cgroup/memory.max
 dbox exec limited-container cat /sys/fs/cgroup/cpu.max
 ```
 
+### CPU Percentage Issues
+
+If CPU percentage seems inaccurate:
+
+```bash
+# CPU percentage is calculated as: (usage_time / elapsed_time) * 100 / cpu_count
+# Common factors affecting accuracy:
+
+# 1. Container start time detection
+dbox usage my-container --cgroup  # Check cgroup path and timing
+
+# 2. CPU limits affecting calculation
+dbox exec my-container cat /sys/fs/cgroup/cpu.max
+
+# 3. System CPU count vs container CPU allocation
+dbox usage my-container --pid --cgroup  # Shows all relevant info
+
+# Note: CPU percentage is capped at 100% and may take time to stabilize
+# after container startup. Short-lived containers may show inaccurate percentages.
+```
+
 ### Network Errors on Android
 
 If you encounter DNS resolution errors on Android:
@@ -885,6 +975,7 @@ dbox is currently in **beta**. It's functional for basic container operations bu
 - [x] Resource limits
 - [x] Container mutability options
 - [x] Container recreate functionality
+- [x] Container resource usage monitoring
 - [ ] Container networking (advanced)
 - [ ] Container updates
 - [ ] GUI interface

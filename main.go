@@ -89,6 +89,7 @@ func main() {
 		setupCmd(),
 		cleanCmd(),
 		attachCmd(),
+		usageCmd(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -593,4 +594,26 @@ func statusCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func usageCmd() *cobra.Command {
+	var (
+		showPID    bool
+		showCgroup bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "usage [container-id]",
+		Short: "Show CPU, memory usage and optional PID/cgroups info",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cm := NewContainerManager(cfg)
+			return cm.Usage(args[0], showPID, showCgroup)
+		},
+	}
+
+	cmd.Flags().BoolVar(&showPID, "pid", false, "Show PID information")
+	cmd.Flags().BoolVar(&showCgroup, "cgroup", false, "Show detailed cgroups information")
+
+	return cmd
 }
