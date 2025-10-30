@@ -6,6 +6,28 @@
 
 A lightweight distrobox-like container management tool written in Go that provides a simple interface for managing OCI containers using crun or runc.
 
+## Quick Reference
+
+```bash
+# Basic workflow
+dbox pull alpine:latest           # Pull image
+dbox create -i alpine -n test    # Create container  
+dbox start test                   # Start container
+dbox exec test /bin/sh           # Execute commands
+dbox stop test                   # Stop container
+dbox delete test                 # Delete container
+
+# One-step workflow
+dbox run -i alpine -n test     # Create + start
+
+# Management
+dbox list                       # List containers
+dbox status test                # Container details
+dbox logs test                  # View logs
+dbox usage test                 # Resource monitoring
+dbox recreate test --privileged  # Fix/modify container
+```
+
 ## Features
 
 - 🐳 Pull images from OCI registries (Docker Hub, etc.)
@@ -17,23 +39,28 @@ A lightweight distrobox-like container management tool written in Go that provid
 - 📋 YAML or JSON configuration
 - 📱 Native Android support
 - 🔒 Static binary builds for enhanced security
-- 🔧 **NEW**: Custom init process support (e.g., `/sbin/init`)
-- 🔒 **NEW**: Privileged container mode with full capabilities
-- 🌐 **NEW**: Network namespace control (host, none, container)
-- 💾 **NEW**: Full container mutability options
-- 🔄 **NEW**: Container recreate command for fixing stopped containers
-- 🖥️ **NEW**: TTY device allocation for init systems (`--tty` flag)
-- ⚙️ **NEW**: Enhanced recreate command with full override support
-- 📊 **NEW**: Container resource usage monitoring with CPU percentage, memory, PID, and cgroups info
+- 🔧 Custom init process support (e.g., `/sbin/init`)
+- 🔒 Privileged container mode with full capabilities
+- 🌐 Network namespace control (host, none, container)
+- 💾 Full container mutability options (OverlayFS vs full copy)
+- 🔄 Container recreate command for fixing stopped containers
+- 🖥️ TTY device allocation for init systems (`--tty` flag)
+- ⚙️ Enhanced recreate command with full override support
+- 📊 Container resource usage monitoring with CPU percentage, memory, PID, and cgroups info
+- 📝 Comprehensive logging with unified log files
+- 🔧 Raw runtime access for advanced debugging
 
 ## Table of Contents
 
 - [Quick Start](#quick-start)
 - [Installation](#installation)
 - [Configuration](#configuration)
+- [Key Behavioral Changes](#key-behavioral-changes)
 - [Usage](#usage)
 - [Advanced Features](#advanced-features)
 - [Examples](#examples)
+- [Command Reference](#command-reference)
+- [Logging](#logging)
 - [Building](#building)
 - [Comparison with Similar Tools](#comparison-with-similar-tools)
 - [Troubleshooting](#troubleshooting)
@@ -47,11 +74,17 @@ A lightweight distrobox-like container management tool written in Go that provid
 # Pull an image
 dbox pull alpine:latest
 
-# Create and run a container
-dbox run -i alpine:latest -n my-container
+# Create a container
+dbox create -i alpine:latest -n my-container
+
+# Start the container
+dbox start my-container
 
 # Execute commands in container
 dbox exec my-container /bin/sh
+
+# Or create and run in one step
+dbox run -i alpine:latest -n my-container
 ```
 
 ## Installation
@@ -115,6 +148,26 @@ registries:
   debian: docker.io/library/debian
 ```
 
+### Key Behavioral Changes
+
+#### Container Lifecycle
+- **Create vs Run**: `create` only sets up the container filesystem, `run` creates AND starts it
+- **Start Behavior**: `start` runs containers in foreground by default (use `-d` for background)
+- **Auto-recreation**: Stopped containers are automatically recreated when `start` is called
+- **Log Management**: All container output is captured to unified log files
+
+#### Command Changes
+- **Enhanced recreate**: Can override ANY original container setting
+- **Resource monitoring**: `usage` command shows CPU percentage and detailed cgroup info
+- **Attach support**: `attach` command provides interactive shell access to running containers
+- **Status command**: Shows comprehensive container information including log location
+- **Raw access**: `raw` command allows direct runtime access for debugging
+
+#### Filesystem Management
+- **OverlayFS default**: Uses OverlayFS for efficient storage (disable with `--no-overlayfs`)
+- **Automatic cleanup**: Proper unmounting and cleanup on container deletion
+- **Progress indicators**: Shows progress for image pulls and filesystem operations
+
 ## Usage
 
 ### Basic Commands
@@ -138,7 +191,8 @@ dbox ls
 # Start a container
 dbox start my-alpine
 
-
+# Check container status
+dbox status my-alpine
 
 # Execute commands in a container
 dbox exec my-alpine /bin/sh
@@ -153,12 +207,15 @@ dbox recreate my-alpine
 # Delete a container
 dbox delete my-alpine
 dbox rm -f my-alpine  # Force delete
+
+# Clean image cache
+dbox clean
 ```
 
 ### Advanced Commands
 
 ```bash
-# Run a container in one step
+# Run a container in one step (create + start)
 dbox run -i ubuntu:22.04 -n dev-env -d
 
 # Run with custom mounts
@@ -177,15 +234,9 @@ dbox setup my-container -s setup.sh
 dbox logs my-container
 dbox logs -f my-container  # Follow logs
 
-# Clean image cache
-dbox clean
-
 # Run raw runtime commands
 dbox raw list
 dbox raw state my-container
-
-# Check container status
-dbox status my-container
 
 # Monitor container resource usage
 dbox usage my-container
@@ -193,8 +244,8 @@ dbox usage my-container --pid      # Show PID information
 dbox usage my-container --cgroup   # Show detailed cgroups info
 dbox usage my-container --pid --cgroup  # Show all information
 
-# Recreate container (fixes stopped containers)
-dbox recreate my-container
+# Attach to running container
+dbox attach my-container
 
 # Enhanced recreate with overrides
 dbox recreate my-container --tty                    # Add TTY devices
@@ -545,19 +596,24 @@ go mod download
 go build -o dbox
 ```
 
-### Cross-Platform Builds
+### Using the Makefile
 
-Use provided Makefile for easy cross-compilation:
+The provided Makefile simplifies building for multiple platforms:
 
 ```bash
-# Build for common platforms
+# Show help
+make help
+
+# Build for all common platforms
 make all
 
 # Build for specific platforms
-make linux-amd64
-make linux-arm64
-make android
-make static-musl
+make linux-amd64      # Linux x86_64
+make linux-arm64      # Linux ARM64  
+make android          # Android (both arm64 and x86_64)
+make android-arm64    # Android ARM64 only
+make android-x86_64   # Android x86_64 only
+make static-musl      # Static Linux binary with musl
 ```
 
 ### Manual Cross-Compilation
@@ -570,7 +626,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dbox-linux-am
 For Android:
 ```bash
 # Set up NDK environment variables
-export NDK_ROOT=$HOME/Android/Sdk/ndk/<version>
+export NDK_ROOT=$HOME/Android/Sdk/ndk/25.1.8937393  # Update version as needed
 export API_LEVEL=21
 export TOOLCHAIN=$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64
 export CC=$TOOLCHAIN/bin/aarch64-linux-android$API_LEVEL-clang
@@ -578,6 +634,15 @@ export CC=$TOOLCHAIN/bin/aarch64-linux-android$API_LEVEL-clang
 # Build
 CGO_ENABLED=1 GOOS=android GOARCH=arm64 go build -ldflags="-s -w" -o dbox-android-arm64 .
 ```
+
+### Build Outputs
+
+Built binaries are placed in the `bin/` directory:
+- `dbox-linux-amd64` - Linux x86_64
+- `dbox-linux-arm64` - Linux ARM64
+- `dbox-android-arm64` - Android ARM64
+- `dbox-android-x86_64` - Android x86_64
+- `dbox-linux-amd64-musl` - Static Linux binary
 
 ## Comparison with Similar Tools
 
@@ -595,6 +660,9 @@ CGO_ENABLED=1 GOOS=android GOARCH=arm64 go build -ldflags="-s -w" -o dbox-androi
 | Network Control | ✓ | ✓ | ✓ | ✓ |
 | Resource Limits | ✓ | Limited | ✓ | ✓ |
 | Usage Monitoring | ✓ | ✗ | ✓ | ✓ |
+| Unified Logging | ✓ | ✗ | ✓ | ✓ |
+| Container Recreate | ✓ | ✗ | ✗ | ✗ |
+| Raw Runtime Access | ✓ | ✗ | Limited | Limited |
 
 ## Container Config Reference
 
@@ -637,10 +705,10 @@ The `container_config.json` supports:
 
 - `-c, --config`: Path to config file (or set `DBOX_CONFIG` env)
 - `-h, --help`: Show help
-- `--version`: Show version
 
-### Create Command
+### Available Commands
 
+#### **create** - Create a new container
 ```bash
 dbox create [flags]
 
@@ -663,11 +731,10 @@ Optional:
   --memory-swap int64     Memory+swap limit in bytes
   --cpu-shares int64      CPU shares (relative weight)
   --blkio-weight uint16   Block IO weight
-  --tty                    Allocate TTY devices (needed for some init systems)
+  --tty                   Allocate TTY devices (needed for some init systems)
 ```
 
-### Run Command
-
+#### **run** - Create and start a container in one step
 ```bash
 dbox run [flags]
 
@@ -691,13 +758,62 @@ Optional:
   --memory-swap int64     Memory+swap limit in bytes
   --cpu-shares int64      CPU shares (relative weight)
   --blkio-weight uint16   Block IO weight
-  --tty                    Allocate TTY devices (needed for some init systems)
+  --tty                   Allocate TTY devices (needed for some init systems)
 ```
 
-### Recreate Command
-
+#### **start** - Start a created container
 ```bash
-dbox recreate <container> [flags]
+dbox start [container-name] [flags]
+Optional:
+  -d, --detach           Run in background (default is foreground)
+```
+
+#### **stop** - Stop a running container
+```bash
+dbox stop [container-name] [flags]
+Optional:
+  -f, --force           Force stop the container
+```
+
+#### **list** - List all containers
+```bash
+dbox list
+# Alias: dbox ls
+```
+
+#### **exec** - Execute commands in a container
+```bash
+dbox exec [container-name] [command...]
+```
+
+#### **attach** - Attach to a running container
+```bash
+dbox attach [container-name]
+```
+
+#### **logs** - View container logs
+```bash
+dbox logs [container-name] [flags]
+Optional:
+  -f, --follow           Follow log output
+```
+
+#### **status** - Show detailed container status
+```bash
+dbox status [container-name]
+```
+
+#### **usage** - Monitor container resource usage
+```bash
+dbox usage [container-name] [flags]
+Optional:
+  --pid                  Show PID information
+  --cgroup               Show detailed cgroups information
+```
+
+#### **recreate** - Recreate container (fixes stopped containers)
+```bash
+dbox recreate [container-name] [flags]
 
 # Override any container setting during recreation:
   -i, --image string           Override image
@@ -718,28 +834,39 @@ dbox recreate <container> [flags]
   --tty                        Override TTY device allocation
 ```
 
-### Usage Command
-
+#### **delete** - Delete a container
 ```bash
-dbox usage <container>       # Show CPU (with percentage) and memory usage
-dbox usage <container> --pid      # Show PID information
-dbox usage <container> --cgroup   # Show detailed cgroups information
-dbox usage <container> --pid --cgroup  # Show all information
+dbox delete [container-name] [flags]
+# Alias: dbox rm
+Optional:
+  -f, --force           Force delete running container
 ```
 
-### Other Commands
-
+#### **pull** - Pull an image from registry
 ```bash
-dbox list                    # List containers
-dbox start <container>       # Start container
-dbox stop <container>        # Stop container
-dbox delete <container>      # Delete container
-dbox exec <container> <cmd>  # Execute command
-dbox pull <image>           # Pull image
-dbox logs <container>        # Show logs
-dbox info                   # Show configuration
-dbox clean                  # Clean image cache
-dbox raw <args>             # Run raw runtime commands
+dbox pull [image]
+```
+
+#### **setup** - Run setup script in existing container
+```bash
+dbox setup [container-name] [flags]
+Required:
+  -s, --script string    Path to setup script
+```
+
+#### **clean** - Clean image cache
+```bash
+dbox clean
+```
+
+#### **info** - Show configuration and runtime information
+```bash
+dbox info
+```
+
+#### **raw** - Run raw runtime commands
+```bash
+dbox raw [runtime-args...]
 ```
 
 ## Environment Variables
@@ -747,6 +874,48 @@ dbox raw <args>             # Run raw runtime commands
 - `DBOX_CONFIG`: Path to configuration file
 - `DBOX_RUNTIME`: Override runtime path
 - `DBOX_RUNPATH`: Override run path
+
+## Logging
+
+dbox provides comprehensive logging for all container operations:
+
+### Unified Log Files
+Each container has a unified log file that captures:
+- Container stdout/stderr output
+- Runtime operation logs
+- dbox operation logs
+
+Log files are located at: `/var/run/dbox/logs/[container-name].log`
+
+### Log Management
+```bash
+# View container logs
+dbox logs my-container
+
+# Follow logs in real-time
+dbox logs -f my-container
+
+# Logs are automatically created when containers start
+# Log location is shown in container status
+dbox status my-container
+```
+
+### Log Format
+```
+[2025-01-30T10:15:30Z] DBOX: Starting container 'my-container'
+[2025-01-30T10:15:31Z] DBOX: Successfully started container 'my-container'
+Container output appears here...
+```
+
+### Log Cleanup
+Logs are automatically cleaned up when containers are deleted. Manual log management:
+```bash
+# View log file location
+ls -la /var/run/dbox/logs/
+
+# Clean all logs (requires manual deletion)
+sudo rm -rf /var/run/dbox/logs/*
+```
 
 ## Directory Structure
 
@@ -856,7 +1025,7 @@ dbox run -i alpine -n test --no-overlayfs
 
 ### Container Lifecycle Management
 
-dbox provides robust container lifecycle management with data preservation:
+dbox provides robust container lifecycle management with automatic recovery:
 
 ```bash
 # Normal workflow
@@ -867,8 +1036,11 @@ dbox stop my-container
 dbox start my-container  # Works normally
 
 # If container won't start after being stopped
-dbox recreate my-container  # Fixes the issue, preserves data
-dbox start my-container      # Now works again
+# dbox automatically recreates it during start
+dbox start my-container  # Auto-fixes the issue, preserves data
+
+# Manual recreate if needed
+dbox recreate my-container
 ```
 
 ### Container Issues
@@ -876,8 +1048,14 @@ dbox start my-container      # Now works again
 If containers have issues:
 
 ```bash
-# First try - recreate (preserves data)
-dbox recreate my-container
+# Check container status first
+dbox status my-container
+
+# View logs for errors
+dbox logs my-container
+
+# Recreate with overrides if needed
+dbox recreate my-container --privileged
 
 # Last resort - delete and recreate (loses data)
 dbox delete my-container -f
@@ -888,25 +1066,38 @@ dbox create -i alpine -n my-container
 
 - **`recreate`**: Preserves all container data and configuration
 - **`delete`**: Completely removes the container including all data
+- **Auto-recreate**: `start` automatically fixes stopped containers
 
-### Recreate Command
+### Automatic Container Recovery
 
-The `recreate` command fixes containers that won't start after being stopped:
+The `start` command automatically handles stopped containers:
 
 ```bash
-# When a container fails to start with this error:
-# "failed to start stopped container 'name': container 'name' is not running"
+# When a container fails to start with "stopped" status:
+dbox start my-container
 
-# Use recreate to fix it:
-dbox recreate my-container
-
-# Recreate does:
-# 1. Stops container if running
+# dbox automatically:
+# 1. Detects stopped container
 # 2. Deletes from runtime (preserves filesystem)
-# 3. Unmounts and remounts OverlayFS
-# 4. Regenerates OCI config with original settings
-# 5. Recreates container in runtime
-# 6. Preserves all data in upper layer
+# 3. Recreates container with original settings
+# 4. Starts the container
+# 5. Preserves all data in OverlayFS upper layer
+```
+
+### Enhanced Recreate Command
+
+The `recreate` command can override any setting:
+
+```bash
+# Change multiple settings at once
+dbox recreate my-container \
+  --privileged \
+  --memory 1g \
+  --net host \
+  --init /sbin/init
+
+# View what changed
+dbox status my-container
 ```
 
 ### Resource Limit Issues
@@ -962,25 +1153,35 @@ dbox pull docker.io/library/alpine:latest
 
 ## Project Status
 
-dbox is currently in **beta**. It's functional for basic container operations but may have bugs. The core features are implemented, but advanced features are still being developed.
+dbox is currently in **beta**. It's functional for basic container operations but may have bugs. The core features are implemented and tested.
 
+### ✅ Implemented Features
 - [x] Basic container operations (create, start, stop, delete)
-- [x] Image management (pull, list)
-- [x] Configuration management
+- [x] Image management (pull, list, clean)
+- [x] Configuration management (YAML/JSON)
 - [x] Android support
 - [x] Static binary builds
 - [x] Custom init process support
 - [x] Privileged container mode
 - [x] Network namespace control
-- [x] Resource limits
-- [x] Container mutability options
-- [x] Container recreate functionality
+- [x] Resource limits (CPU, memory, block I/O)
+- [x] Container mutability options (OverlayFS vs full copy)
+- [x] Container recreate functionality with overrides
 - [x] Container resource usage monitoring
+- [x] Comprehensive logging system
+- [x] Raw runtime access
+- [x] Container attach functionality
+- [x] Setup script execution
+
+### 🚧 Planned Features
 - [ ] Container networking (advanced)
 - [ ] Container updates
 - [ ] GUI interface
 - [ ] Container snapshots
 - [ ] Multi-architecture image support
+- [ ] Container export/import
+- [ ] Health checks
+- [ ] Auto-restart policies
 
 ## Contributing
 
