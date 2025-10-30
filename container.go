@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/v1"
@@ -166,7 +167,15 @@ func (cm *ContainerManager) Run(opts *RunOptions) error {
 		return err
 	}
 
-	createOpts := &CreateOptions{Image: opts.Image, Name: opts.Name, Envs: opts.Envs}
+	createOpts := &CreateOptions{
+		Image:        opts.Image,
+		Name:         opts.Name,
+		Envs:         opts.Envs,
+		TTY:          opts.TTY,
+		Privileged:   opts.Privileged,
+		NetNamespace: opts.NetNamespace,
+		InitProcess:  opts.InitProcess,
+	}
 
 	if err := cm.generateOCISpecUsingRuntime(bundlePath, imagePath, opts.Name, createOpts, opts, containerCfg, rootPathForSpec); err != nil {
 		if !opts.NoOverlayFS {
@@ -321,7 +330,8 @@ func (cm *ContainerManager) generateOCISpecUsingRuntime(bundlePath, imagePath, n
 		// Add all capabilities for privileged mode
 		capsToAdd = append(capsToAdd, "CAP_SYS_ADMIN", "CAP_NET_ADMIN", "CAP_SYS_PTRACE",
 			"CAP_SYS_MODULE", "CAP_DAC_READ_SEARCH", "CAP_SYS_RAWIO", "CAP_SYS_TIME",
-			"CAP_AUDIT_CONTROL", "CAP_AUDIT_WRITE", "CAP_MAC_ADMIN", "CAP_MAC_OVERRIDE")
+			"CAP_AUDIT_CONTROL", "CAP_AUDIT_WRITE", "CAP_MAC_ADMIN", "CAP_MAC_OVERRIDE",
+			"CAP_SYS_TTY_CONFIG")
 	}
 
 	existingCaps := make(map[string]bool)
@@ -396,7 +406,10 @@ func (cm *ContainerManager) generateOCISpecUsingRuntime(bundlePath, imagePath, n
 		needsTTYDevices = runOpts.TTY
 	}
 
+	fmt.Printf("DEBUG: needsTTYDevices = %v\n", needsTTYDevices)
+
 	if needsTTYDevices {
+		fmt.Printf("DEBUG: Setting up TTY devices\n")
 		if ociSpec.Linux == nil {
 			ociSpec.Linux = &spec.Linux{}
 		}
@@ -434,6 +447,24 @@ func (cm *ContainerManager) generateOCISpecUsingRuntime(bundlePath, imagePath, n
 				UID:      &uid,
 				GID:      &gid,
 			})
+		}
+
+		// Add bind mounts for TTY devices from host
+		for _, tty := range ttyDevices {
+			hostDevice := "/dev/" + tty
+			containerDevice := "/dev/" + tty
+			if _, err := os.Stat(hostDevice); err == nil {
+				// Device exists on host, add bind mount with more permissive options
+				ociSpec.Mounts = append(ociSpec.Mounts, spec.Mount{
+					Destination: containerDevice,
+					Source:      hostDevice,
+					Type:        "bind",
+					Options:     []string{"bind", "rw"},
+				})
+				fmt.Printf("DEBUG: Added bind mount for %s\n", hostDevice)
+			} else {
+				fmt.Printf("DEBUG: Host device %s not found, skipping bind mount\n", hostDevice)
+			}
 		}
 	}
 
@@ -678,6 +709,42 @@ func getTTYMinor(tty string) int64 {
 	return 0
 }
 
+func (cm *ContainerManager) createTTYDevices(bundlePath, rootPathForSpec string, ttyDevices []string) error {
+	// Create /dev directory in container if it doesn't exist
+	devPath := filepath.Join(bundlePath, rootPathForSpec, "dev")
+	fmt.Printf("DEBUG: Creating /dev directory at %s\n", devPath)
+	if err := os.MkdirAll(devPath, 0755); err != nil {
+		return fmt.Errorf("failed to create /dev directory: %w", err)
+	}
+
+	// Create TTY device nodes
+	for _, tty := range ttyDevices {
+		devicePath := filepath.Join(devPath, tty)
+		minor := getTTYMinor(tty)
+		major := int64(4)
+
+		fmt.Printf("DEBUG: Creating device node %s with major %d, minor %d\n", devicePath, major, minor)
+
+		// Create character device node using mknod
+		dev := int((major << 8) | minor)
+		if err := syscall.Mknod(devicePath, syscall.S_IFCHR|0600, dev); err != nil {
+			fmt.Printf("DEBUG: mknod failed for %s: %v, trying fallback\n", devicePath, err)
+			// If mknod fails, try creating as a regular file as fallback
+			// This allows the container to start even if we can't create real device nodes
+			if file, err := os.Create(devicePath); err == nil {
+				file.Close()
+				fmt.Printf("Warning: Created fallback file for %s (device node creation failed)\n", devicePath)
+			} else {
+				return fmt.Errorf("failed to create device node %s: %w", devicePath, err)
+			}
+		} else {
+			fmt.Printf("DEBUG: Successfully created device node %s\n", devicePath)
+		}
+	}
+
+	return nil
+}
+
 func (cm *ContainerManager) Create(opts *CreateOptions) error {
 	fmt.Printf("Creating container '%s' from image '%s'...\n", opts.Name, opts.Image)
 	containerPath := filepath.Join(cm.cfg.ContainersPath, opts.Name)
@@ -812,7 +879,7 @@ func (cm *ContainerManager) List() error {
 	return nil
 }
 
-func (cm *ContainerManager) Start(name string) error {
+func (cm *ContainerManager) Start(name string, detach bool) error {
 	logDir := filepath.Join(cm.cfg.RunPath, "logs")
 	if err := os.MkdirAll(logDir, 0750); err != nil {
 		return fmt.Errorf("failed to create log directory: %w", err)
@@ -828,10 +895,15 @@ func (cm *ContainerManager) Start(name string) error {
 	defer logger.Close()
 
 	logger.Log(fmt.Sprintf("Starting container '%s'", name))
-	fmt.Printf("Starting container '%s' in background...\n", name)
-	fmt.Printf("Logs will be available at: %s\n", logPath)
 
-	err := cm.runtime.Start(name, logPath)
+	if detach {
+		fmt.Printf("Starting container '%s' in background...\n", name)
+		fmt.Printf("Logs will be available at: %s\n", logPath)
+	} else {
+		fmt.Printf("Starting container '%s' in foreground...\n", name)
+	}
+
+	err := cm.runtime.Start(name, logPath, detach)
 	if err != nil {
 		logger.Log(fmt.Sprintf("Failed to start container '%s': %v", name, err))
 	} else {

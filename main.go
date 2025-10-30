@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -182,15 +185,20 @@ func listCmd() *cobra.Command {
 }
 
 func startCmd() *cobra.Command {
-	return &cobra.Command{
+	var detach bool
+
+	cmd := &cobra.Command{
 		Use:   "start [container-name]",
 		Short: "Start a container",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cm := NewContainerManager(cfg)
-			return cm.Start(args[0])
+			return cm.Start(args[0], detach)
 		},
 	}
+
+	cmd.Flags().BoolVarP(&detach, "detach", "d", false, "Run container in background (default is foreground)")
+	return cmd
 }
 
 func stopCmd() *cobra.Command {
@@ -420,18 +428,67 @@ func logsCmd() *cobra.Command {
 				return fmt.Errorf("no logs found for container '%s' at %s", containerName, logPath)
 			}
 
-			var logCmd *exec.Cmd
-
 			if follow {
-				logCmd = exec.Command("tail", "-f", logPath)
+				// Check if there's already a tail process for this container
+				pidFile := filepath.Join(cfg.RunPath, "logs", "."+containerName+".tail.pid")
+				if pidData, err := os.ReadFile(pidFile); err == nil {
+					if pid, err := strconv.Atoi(string(pidData)); err == nil {
+						// Check if process is still running
+						if process, err := os.FindProcess(pid); err == nil {
+							if err := process.Signal(syscall.Signal(0)); err == nil {
+								return fmt.Errorf("log following already active for container '%s' (PID %d)", containerName, pid)
+							}
+						}
+					}
+					// Process not running, clean up stale PID file
+					os.Remove(pidFile)
+				}
+
+				// Start tail process
+				logCmd := exec.Command("tail", "-f", logPath)
+				logCmd.Stdout = os.Stdout
+				logCmd.Stderr = os.Stderr
+
+				// Start the process
+				if err := logCmd.Start(); err != nil {
+					return fmt.Errorf("failed to start tail process: %w", err)
+				}
+
+				// Write PID file
+				if err := os.WriteFile(pidFile, []byte(strconv.Itoa(logCmd.Process.Pid)), 0644); err != nil {
+					logCmd.Process.Kill()
+					return fmt.Errorf("failed to write PID file: %w", err)
+				}
+
+				// Set up signal handling for cleanup
+				sigChan := make(chan os.Signal, 1)
+				signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+				// Wait for process to finish or signal
+				done := make(chan error, 1)
+				go func() {
+					done <- logCmd.Wait()
+				}()
+
+				select {
+				case err := <-done:
+					// Process finished normally
+					os.Remove(pidFile)
+					return err
+				case sig := <-sigChan:
+					// Received signal, cleanup
+					logCmd.Process.Signal(sig)
+					logCmd.Wait()
+					os.Remove(pidFile)
+					return nil
+				}
 			} else {
-				logCmd = exec.Command("cat", logPath)
+				// Non-follow mode, just cat the file
+				logCmd := exec.Command("cat", logPath)
+				logCmd.Stdout = os.Stdout
+				logCmd.Stderr = os.Stderr
+				return logCmd.Run()
 			}
-
-			logCmd.Stdout = os.Stdout
-			logCmd.Stderr = os.Stderr
-
-			return logCmd.Run()
 		},
 	}
 
