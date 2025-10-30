@@ -54,23 +54,23 @@ func (r *Runtime) Start(containerID, logPath string, detach bool) error {
 	if err != nil {
 		// If container doesn't exist in runtime, we need to recreate it
 		if strings.Contains(err.Error(), "does not exist") {
-			logDebug("Container '%s' not found in runtime, recreating automatically", containerID)
+			logVerbose("Container '%s' not found in runtime, recreating automatically", containerID)
 			// Find the container bundle path
 			bundlePath := filepath.Join(r.cfg.ContainersPath, containerID)
 
 			// Use the same logic as stopped containers - run with output capture
 			// run command combines create + start, so we don't need separate create
-			logDebug("Running recreated container with bundle: %s, logPath: %s", bundlePath, logPath)
+			logVerbose("Running recreated container with bundle: %s, logPath: %s", bundlePath, logPath)
 			return r.Run(containerID, bundlePath, detach, logPath)
 		}
 		return fmt.Errorf("failed to get container state: %w", err)
 	}
 
-	logDebug("Container '%s' state: %s", containerID, state)
+	logVerbose("Container '%s' state: %s", containerID, state)
 
 	// If container is already running, nothing to do
 	if state == "running" {
-		logDebug("Container already running, nothing to do")
+		logVerbose("Container already running, nothing to do")
 		return nil
 	}
 
@@ -79,7 +79,7 @@ func (r *Runtime) Start(containerID, logPath string, detach bool) error {
 
 	// For stopped containers, we need to delete and recreate to capture output properly
 	if state == "stopped" {
-		logDebug("Container is in 'stopped' state, using Run() method for output capture")
+		logVerbose("Container is in 'stopped' state, using Run() method for output capture")
 		// Delete from runtime first
 		deleteArgs := []string{"--root", r.cfg.RunPath, "delete", containerID}
 		deleteCmd := exec.Command(r.cfg.Runtime, deleteArgs...)
@@ -89,7 +89,7 @@ func (r *Runtime) Start(containerID, logPath string, detach bool) error {
 		}
 
 		// Now run with output capture
-		logDebug("Running container with bundle: %s, logPath: %s", bundlePath, logPath)
+		logVerbose("Running container with bundle: %s, logPath: %s", bundlePath, logPath)
 		return r.Run(containerID, bundlePath, detach, logPath)
 	}
 
@@ -158,23 +158,23 @@ func (r *Runtime) Stop(containerID string, force bool) error {
 	if err != nil {
 		// If container doesn't exist in runtime, it's already stopped
 		if strings.Contains(err.Error(), "does not exist") {
-			logDebug("Container '%s' not found in runtime, already stopped", containerID)
+			logVerbose("Container '%s' not found in runtime, already stopped", containerID)
 			return nil
 		}
 		return fmt.Errorf("failed to get container state: %w", err)
 	}
 
-	logDebug("Stopping container '%s' in state '%s'", containerID, state)
+	logVerbose("Stopping container '%s' in state '%s'", containerID, state)
 
 	// If container is already stopped, nothing to do
 	if state == "stopped" {
-		logDebug("Container already stopped")
+		logVerbose("Container already stopped")
 		return nil
 	}
 
 	// For created containers, just delete them since they're not running
 	if state == "created" {
-		logDebug("Container is in 'created' state, deleting instead of killing")
+		logVerbose("Container is in 'created' state, deleting instead of killing")
 		return r.Delete(containerID, false)
 	}
 
@@ -230,7 +230,7 @@ func (r *Runtime) Delete(containerID string, force bool) error {
 }
 
 func (r *Runtime) List() ([]string, error) {
-	logDebug("Listing containers")
+	logVerbose("Listing containers")
 	cmd := exec.Command(
 		r.cfg.Runtime,
 		"--root", r.cfg.RunPath,

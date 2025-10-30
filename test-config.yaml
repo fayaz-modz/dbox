@@ -1,3 +1,0 @@
-runtime: /usr/bin/crun
-runpath: /tmp/dbox-run
-containers_path: /tmp/dbox-containers

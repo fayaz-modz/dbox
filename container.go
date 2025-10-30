@@ -99,6 +99,87 @@ func NewContainerManager(cfg *Config) *ContainerManager {
 	}
 }
 
+// mergeContainerConfigs merges container configurations with proper priority:
+// default config < container config file < CLI flags
+func (cm *ContainerManager) mergeContainerConfigs(containerCfg *ContainerConfig, opts *CreateOptions, runOpts *RunOptions) *ContainerConfig {
+	// Start with default config
+	merged := &ContainerConfig{}
+
+	// Apply container config file (if exists)
+	if containerCfg != nil {
+		if containerCfg.Mounts != nil {
+			merged.Mounts = append([]Mount{}, containerCfg.Mounts...)
+		}
+		if containerCfg.SSH != nil {
+			merged.SSH = &SSH{
+				Enable: containerCfg.SSH.Enable,
+				Port:   containerCfg.SSH.Port,
+			}
+		}
+		if containerCfg.User != nil {
+			merged.User = &User{
+				Username: containerCfg.User.Username,
+				Password: containerCfg.User.Password,
+				Wheel:    containerCfg.User.Wheel,
+				Sudo:     containerCfg.User.Sudo,
+			}
+		}
+		if containerCfg.Resources != nil {
+			merged.Resources = &Resources{
+				CPUQuota:    containerCfg.Resources.CPUQuota,
+				CPUPeriod:   containerCfg.Resources.CPUPeriod,
+				MemoryLimit: containerCfg.Resources.MemoryLimit,
+				MemorySwap:  containerCfg.Resources.MemorySwap,
+				CPUShares:   containerCfg.Resources.CPUShares,
+				BlkioWeight: containerCfg.Resources.BlkioWeight,
+			}
+		}
+	}
+
+	// Apply CLI flags (highest priority)
+	var cliOpts *CreateOptions
+	if opts != nil {
+		cliOpts = opts
+	} else if runOpts != nil {
+		cliOpts = &CreateOptions{
+			CPUQuota:    runOpts.CPUQuota,
+			CPUPeriod:   runOpts.CPUPeriod,
+			MemoryLimit: runOpts.MemoryLimit,
+			MemorySwap:  runOpts.MemorySwap,
+			CPUShares:   runOpts.CPUShares,
+			BlkioWeight: runOpts.BlkioWeight,
+		}
+	}
+
+	if cliOpts != nil {
+		// Update resources with CLI overrides
+		if merged.Resources == nil {
+			merged.Resources = &Resources{}
+		}
+
+		if cliOpts.CPUQuota != 0 {
+			merged.Resources.CPUQuota = cliOpts.CPUQuota
+		}
+		if cliOpts.CPUPeriod != 0 {
+			merged.Resources.CPUPeriod = cliOpts.CPUPeriod
+		}
+		if cliOpts.MemoryLimit != 0 {
+			merged.Resources.MemoryLimit = cliOpts.MemoryLimit
+		}
+		if cliOpts.MemorySwap != 0 {
+			merged.Resources.MemorySwap = cliOpts.MemorySwap
+		}
+		if cliOpts.CPUShares != 0 {
+			merged.Resources.CPUShares = cliOpts.CPUShares
+		}
+		if cliOpts.BlkioWeight != 0 {
+			merged.Resources.BlkioWeight = cliOpts.BlkioWeight
+		}
+	}
+
+	return merged
+}
+
 func (cm *ContainerManager) Run(opts *RunOptions) error {
 	if opts.Name == "" {
 		randomName, err := generateRandomName()
@@ -236,6 +317,9 @@ func (cm *ContainerManager) generateOCISpecUsingRuntime(bundlePath, imagePath, n
 	if err := json.Unmarshal(data, &ociSpec); err != nil {
 		return fmt.Errorf("failed to parse generated config: %w", err)
 	}
+
+	// Merge configurations with proper priority: default < container config < CLI flags
+	mergedConfig := cm.mergeContainerConfigs(containerCfg, opts, runOpts)
 	if ociSpec.Root == nil {
 		ociSpec.Root = &spec.Root{}
 	}
@@ -372,8 +456,8 @@ func (cm *ContainerManager) generateOCISpecUsingRuntime(bundlePath, imagePath, n
 		Destination: "/dev/shm", Type: "tmpfs", Source: "shm",
 		Options: []string{"nosuid", "noexec", "nodev", "mode=1777", "size=65536k"},
 	})
-	if containerCfg != nil {
-		for _, m := range containerCfg.Mounts {
+	if mergedConfig != nil && mergedConfig.Mounts != nil {
+		for _, m := range mergedConfig.Mounts {
 			mount := spec.Mount{Destination: m.Destination, Source: m.Source, Type: m.Type, Options: m.Options}
 			ociSpec.Mounts = append(ociSpec.Mounts, mount)
 		}
@@ -406,10 +490,10 @@ func (cm *ContainerManager) generateOCISpecUsingRuntime(bundlePath, imagePath, n
 		needsTTYDevices = runOpts.TTY
 	}
 
-	fmt.Printf("DEBUG: needsTTYDevices = %v\n", needsTTYDevices)
+	logDebug("needsTTYDevices = %v", needsTTYDevices)
 
 	if needsTTYDevices {
-		fmt.Printf("DEBUG: Setting up TTY devices\n")
+		logDebug("Setting up TTY devices")
 		if ociSpec.Linux == nil {
 			ociSpec.Linux = &spec.Linux{}
 		}
@@ -461,9 +545,9 @@ func (cm *ContainerManager) generateOCISpecUsingRuntime(bundlePath, imagePath, n
 					Type:        "bind",
 					Options:     []string{"bind", "rw"},
 				})
-				fmt.Printf("DEBUG: Added bind mount for %s\n", hostDevice)
+				logDebug("Added bind mount for %s", hostDevice)
 			} else {
-				fmt.Printf("DEBUG: Host device %s not found, skipping bind mount\n", hostDevice)
+				logDebug("Host device %s not found, skipping bind mount", hostDevice)
 			}
 		}
 	}
@@ -481,24 +565,17 @@ func (cm *ContainerManager) generateOCISpecUsingRuntime(bundlePath, imagePath, n
 		resources = ociSpec.Linux.Resources
 	}
 
-	// Get resource limits from options
+	// Get resource limits from merged config (already has proper priority applied)
 	var cpuQuota, cpuPeriod, memoryLimit, memorySwap, cpuShares int64
 	var blkioWeight uint16
 
-	if opts != nil {
-		cpuQuota = opts.CPUQuota
-		cpuPeriod = opts.CPUPeriod
-		memoryLimit = opts.MemoryLimit
-		memorySwap = opts.MemorySwap
-		cpuShares = opts.CPUShares
-		blkioWeight = opts.BlkioWeight
-	} else if runOpts != nil {
-		cpuQuota = runOpts.CPUQuota
-		cpuPeriod = runOpts.CPUPeriod
-		memoryLimit = runOpts.MemoryLimit
-		memorySwap = runOpts.MemorySwap
-		cpuShares = runOpts.CPUShares
-		blkioWeight = runOpts.BlkioWeight
+	if mergedConfig != nil && mergedConfig.Resources != nil {
+		cpuQuota = mergedConfig.Resources.CPUQuota
+		cpuPeriod = mergedConfig.Resources.CPUPeriod
+		memoryLimit = mergedConfig.Resources.MemoryLimit
+		memorySwap = mergedConfig.Resources.MemorySwap
+		cpuShares = mergedConfig.Resources.CPUShares
+		blkioWeight = mergedConfig.Resources.BlkioWeight
 	}
 
 	// Apply CPU limits
@@ -542,6 +619,12 @@ func (cm *ContainerManager) generateOCISpecUsingRuntime(bundlePath, imagePath, n
 			resources.BlockIO = &spec.LinuxBlockIO{}
 		}
 		resources.BlockIO.Weight = &blkioWeight
+	}
+
+	// Save the merged container config to the container directory
+	containerConfigPath := filepath.Join(filepath.Dir(configPath), "container_config.json")
+	if mergedConfigData, err := json.MarshalIndent(mergedConfig, "", "  "); err == nil {
+		os.WriteFile(containerConfigPath, mergedConfigData, 0644)
 	}
 
 	modifiedData, err := json.MarshalIndent(ociSpec, "", "  ")
@@ -711,7 +794,7 @@ func getTTYMinor(tty string) int64 {
 
 func (cm *ContainerManager) Create(opts *CreateOptions) error {
 	logInfo("Creating container '%s' from image '%s'...", opts.Name, opts.Image)
-	logDebug("Container path: %s", filepath.Join(cm.cfg.ContainersPath, opts.Name))
+	logVerbose("Container path: %s", filepath.Join(cm.cfg.ContainersPath, opts.Name))
 
 	containerPath := filepath.Join(cm.cfg.ContainersPath, opts.Name)
 	if _, err := os.Stat(containerPath); !os.IsNotExist(err) {
@@ -891,10 +974,10 @@ func (cm *ContainerManager) Stop(name string, force bool) error {
 	err := cm.runtime.Stop(name, force)
 	if err != nil {
 		logger.Log(fmt.Sprintf("Failed to stop container '%s': %v", name, err))
-		logVerbose("Failed to stop container '%s': %v", name, err)
+		logDebug("Failed to stop container '%s': %v", name, err)
 	} else {
 		logger.Log(fmt.Sprintf("Successfully stopped container '%s'", name))
-		logVerbose("Successfully stopped container '%s'", name)
+		logDebug("Successfully stopped container '%s'", name)
 	}
 
 	return err
@@ -929,7 +1012,7 @@ func (cm *ContainerManager) Recreate(name string) error {
 	// Stop the container if it's running
 	state, err := cm.runtime.State(name)
 	if err == nil && (state == "running" || state == "creating" || state == "paused") {
-		logVerbose("Stopping container '%s' before recreate...", name)
+		logInfo("Stopping container '%s' before recreate...", name)
 		if err := cm.runtime.Stop(name, true); err != nil {
 			fmt.Printf("Warning: failed to stop container: %v\n", err)
 		}
