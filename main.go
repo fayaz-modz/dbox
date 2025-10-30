@@ -117,6 +117,7 @@ func main() {
 		cleanCmd(),
 		attachCmd(),
 		usageCmd(),
+		scriptCmd(),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -126,23 +127,21 @@ func main() {
 
 func createCmd() *cobra.Command {
 	var (
-		image           string
-		name            string
-		containerCfg    string
-		setupScript     string
-		postSetupScript string
-		envs            []string
-		noOverlayFS     bool
-		cpuQuota        int64
-		cpuPeriod       int64
-		memoryLimit     int64
-		memorySwap      int64
-		cpuShares       int64
-		blkioWeight     uint16
-		initProcess     string
-		privileged      bool
-		netNamespace    string
-		tty             bool
+		image        string
+		name         string
+		containerCfg string
+		envs         []string
+		noOverlayFS  bool
+		cpuQuota     int64
+		cpuPeriod    int64
+		memoryLimit  int64
+		memorySwap   int64
+		cpuShares    int64
+		blkioWeight  uint16
+		initProcess  string
+		privileged   bool
+		netNamespace string
+		tty          bool
 	)
 
 	cmd := &cobra.Command{
@@ -155,8 +154,6 @@ func createCmd() *cobra.Command {
 				Image:           image,
 				Name:            name,
 				ContainerConfig: containerCfg,
-				SetupScript:     setupScript,
-				PostSetupScript: postSetupScript,
 				Envs:            envs,
 				NoOverlayFS:     noOverlayFS,
 				CPUQuota:        cpuQuota,
@@ -178,8 +175,6 @@ func createCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&image, "image", "i", "", "Image to use (e.g., alpine:latest)")
 	cmd.Flags().StringVarP(&name, "name", "n", "", "Container name")
 	cmd.Flags().StringVar(&containerCfg, "container-config", "", "Path to container_config.json")
-	cmd.Flags().StringVar(&setupScript, "setup-script", "", "Setup script to run during creation")
-	cmd.Flags().StringVar(&postSetupScript, "post-setup-script", "", "Setup script to run after creation")
 	cmd.Flags().StringArrayVarP(&envs, "env", "e", []string{}, "Set environment variables (e.g., -e FOO=bar)")
 	cmd.Flags().BoolVar(&noOverlayFS, "no-overlayfs", false, "Disable OverlayFS and copy the rootfs (slower, but works on filesystems without overlay support)")
 	cmd.Flags().Int64Var(&cpuQuota, "cpu-quota", 0, "CPU quota in microseconds (e.g., 50000 for 5% CPU)")
@@ -246,22 +241,20 @@ func stopCmd() *cobra.Command {
 
 func recreateCmd() *cobra.Command {
 	var (
-		image           string
-		containerCfg    string
-		setupScript     string
-		postSetupScript string
-		envs            []string
-		noOverlayFS     bool
-		cpuQuota        int64
-		cpuPeriod       int64
-		memoryLimit     int64
-		memorySwap      int64
-		cpuShares       int64
-		blkioWeight     uint16
-		initProcess     string
-		privileged      bool
-		netNamespace    string
-		tty             bool
+		image        string
+		containerCfg string
+		envs         []string
+		noOverlayFS  bool
+		cpuQuota     int64
+		cpuPeriod    int64
+		memoryLimit  int64
+		memorySwap   int64
+		cpuShares    int64
+		blkioWeight  uint16
+		initProcess  string
+		privileged   bool
+		netNamespace string
+		tty          bool
 	)
 
 	cmd := &cobra.Command{
@@ -276,8 +269,6 @@ func recreateCmd() *cobra.Command {
 				Name:            args[0],
 				Image:           image,
 				ContainerConfig: containerCfg,
-				SetupScript:     setupScript,
-				PostSetupScript: postSetupScript,
 				Envs:            envs,
 				NoOverlayFS:     noOverlayFS,
 				CPUQuota:        cpuQuota,
@@ -299,8 +290,6 @@ func recreateCmd() *cobra.Command {
 	// Flags
 	cmd.Flags().StringVarP(&image, "image", "i", "", "Override image (e.g., alpine:latest)")
 	cmd.Flags().StringVar(&containerCfg, "container-config", "", "Override container_config.json")
-	cmd.Flags().StringVar(&setupScript, "setup-script", "", "Override setup script to run during creation")
-	cmd.Flags().StringVar(&postSetupScript, "post-setup-script", "", "Override setup script to run after creation")
 	cmd.Flags().StringArrayVarP(&envs, "env", "e", []string{}, "Override environment variables (e.g., -e FOO=bar)")
 	cmd.Flags().BoolVar(&noOverlayFS, "no-overlayfs", false, "Override OverlayFS setting")
 	cmd.Flags().Int64Var(&cpuQuota, "cpu-quota", 0, "Override CPU quota in microseconds")
@@ -697,6 +686,20 @@ func usageCmd() *cobra.Command {
 
 	cmd.Flags().BoolVar(&showPID, "pid", false, "Show PID information")
 	cmd.Flags().BoolVar(&showCgroup, "cgroup", false, "Show detailed cgroups information")
+
+	return cmd
+}
+
+func scriptCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "script [container-name] [script-path]",
+		Short: "Run a script in an existing container",
+		Args:  cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cm := NewContainerManager(cfg)
+			return cm.RunScript(args[0], args[1])
+		},
+	}
 
 	return cmd
 }

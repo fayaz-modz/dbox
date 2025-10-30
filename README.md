@@ -718,8 +718,7 @@ Required:
 
 Optional:
   --container-config string  Path to container_config.json
-  --setup-script string      Setup script to run during creation
-  --post-setup-script string Setup script to run after creation
+
   -e, --env strings         Set environment variables
   --no-overlayfs           Disable OverlayFS and copy rootfs
   --init string            Override init process (e.g., /sbin/init)
@@ -818,8 +817,7 @@ dbox recreate [container-name] [flags]
 # Override any container setting during recreation:
   -i, --image string           Override image
   --container-config string     Override container_config.json
-  --setup-script string         Override setup script
-  --post-setup-script string    Override post-setup script
+
   -e, --env strings            Override environment variables
   --no-overlayfs               Override OverlayFS setting
   --init string                Override init process

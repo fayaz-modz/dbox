@@ -34,8 +34,6 @@ type CreateOptions struct {
 	Image           string
 	Name            string
 	ContainerConfig string
-	SetupScript     string
-	PostSetupScript string
 	Envs            []string
 	NoOverlayFS     bool
 	CPUQuota        int64
@@ -75,8 +73,6 @@ type RecreateOptions struct {
 	Name            string
 	Image           string
 	ContainerConfig string
-	SetupScript     string
-	PostSetupScript string
 	Envs            []string
 	NoOverlayFS     bool
 	CPUQuota        int64
@@ -415,7 +411,7 @@ func (cm *ContainerManager) generateOCISpecUsingRuntime(bundlePath, imagePath, n
 		capsToAdd = append(capsToAdd, "CAP_SYS_ADMIN", "CAP_NET_ADMIN", "CAP_SYS_PTRACE",
 			"CAP_SYS_MODULE", "CAP_DAC_READ_SEARCH", "CAP_SYS_RAWIO", "CAP_SYS_TIME",
 			"CAP_AUDIT_CONTROL", "CAP_AUDIT_WRITE", "CAP_MAC_ADMIN", "CAP_MAC_OVERRIDE",
-			"CAP_SYS_TTY_CONFIG", "CAP_FOWNER")
+			"CAP_SYS_TTY_CONFIG", "CAP_FOWNER", "CAP_SYS_CHROOT")
 	}
 
 	existingCaps := make(map[string]bool)
@@ -445,7 +441,10 @@ func (cm *ContainerManager) generateOCISpecUsingRuntime(bundlePath, imagePath, n
 
 		// Remove seccomp for privileged mode
 		if privileged {
-			ociSpec.Linux.Seccomp = nil
+			ociSpec.Linux.Seccomp = &spec.LinuxSeccomp{
+				DefaultAction: spec.ActAllow,
+			}
+			ociSpec.Process.NoNewPrivileges = false
 		}
 	}
 
@@ -1242,8 +1241,6 @@ func (cm *ContainerManager) RecreateWithOptions(opts *RecreateOptions) error {
 		Name:            opts.Name,
 		Image:           imageName,
 		ContainerConfig: opts.ContainerConfig,
-		SetupScript:     opts.SetupScript,
-		PostSetupScript: opts.PostSetupScript,
 		Envs:            opts.Envs,
 		NoOverlayFS:     opts.NoOverlayFS,
 		CPUQuota:        opts.CPUQuota,
@@ -1796,6 +1793,36 @@ func (cm *ContainerManager) showDetailedCgroupInfo(cgroupPath string) error {
 			}
 		}
 	}
+
+	return nil
+}
+
+func (cm *ContainerManager) RunScript(containerName, scriptPath string) error {
+	// Read the script content
+	scriptContent, err := os.ReadFile(scriptPath)
+	if err != nil {
+		return fmt.Errorf("failed to read script %s: %w", scriptPath, err)
+	}
+
+	// Create a temporary script file in the container
+	tempScript := "/tmp/dbox_script_" + filepath.Base(scriptPath)
+
+	// Copy script to container using echo to avoid heredoc issues
+	escapedContent := strings.ReplaceAll(string(scriptContent), "'", "'\"'\"'")
+	copyCmd := []string{"sh", "-c", fmt.Sprintf("echo '%s' > %s", escapedContent, tempScript)}
+	if err := cm.runtime.Exec(containerName, copyCmd); err != nil {
+		return fmt.Errorf("failed to copy script to container: %w", err)
+	}
+
+	// Make script executable and run it
+	runCmd := []string{"sh", "-c", fmt.Sprintf("chmod +x %s && %s", tempScript, tempScript)}
+	if err := cm.runtime.Exec(containerName, runCmd); err != nil {
+		return fmt.Errorf("failed to run script in container: %w", err)
+	}
+
+	// Clean up
+	cleanupCmd := []string{"rm", "-f", tempScript}
+	cm.runtime.Exec(containerName, cleanupCmd) // Ignore cleanup errors
 
 	return nil
 }
