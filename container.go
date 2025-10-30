@@ -74,7 +74,6 @@ type RecreateOptions struct {
 	Image           string
 	ContainerConfig string
 	Envs            []string
-	NoOverlayFS     bool
 	CPUQuota        int64
 	CPUPeriod       int64
 	MemoryLimit     int64
@@ -459,6 +458,16 @@ func (cm *ContainerManager) generateOCISpecUsingRuntime(bundlePath, imagePath, n
 		Destination: "/dev/shm", Type: "tmpfs", Source: "shm",
 		Options: []string{"nosuid", "noexec", "nodev", "mode=1777", "size=65536k"},
 	})
+
+	// Add cgroup mount for privileged containers to allow service management
+	if privileged {
+		ociSpec.Mounts = append(ociSpec.Mounts, spec.Mount{
+			Destination: "/sys/fs/cgroup",
+			Type:        "cgroup",
+			Source:      "cgroup",
+			Options:     []string{"rw", "nosuid", "nodev", "noexec", "relatime"},
+		})
+	}
 	if mergedConfig != nil && mergedConfig.Mounts != nil {
 		for _, m := range mergedConfig.Mounts {
 			mount := spec.Mount{Destination: m.Destination, Source: m.Source, Type: m.Type, Options: m.Options}
@@ -1236,13 +1245,23 @@ func (cm *ContainerManager) RecreateWithOptions(opts *RecreateOptions) error {
 		}
 	}
 
+	// Detect original OverlayFS setting by checking container structure
+	originalNoOverlayFS := false
+	rootfsPath := filepath.Join(containerPath, "rootfs")
+
+	if _, err = os.Stat(rootfsPath); err == nil {
+		originalNoOverlayFS = true
+	} else if _, err = os.Stat(mergedPath); err == nil {
+		originalNoOverlayFS = false
+	}
+
 	// Create options that merge original settings with overrides
 	createOpts := &CreateOptions{
 		Name:            opts.Name,
 		Image:           imageName,
 		ContainerConfig: opts.ContainerConfig,
 		Envs:            opts.Envs,
-		NoOverlayFS:     opts.NoOverlayFS,
+		NoOverlayFS:     originalNoOverlayFS,
 		CPUQuota:        opts.CPUQuota,
 		CPUPeriod:       opts.CPUPeriod,
 		MemoryLimit:     opts.MemoryLimit,

@@ -157,7 +157,7 @@ registries:
 - **Log Management**: All container output is captured to unified log files
 
 #### Command Changes
-- **Enhanced recreate**: Can override ANY original container setting
+- **Enhanced recreate**: Can override ANY original container setting, automatically preserves OverlayFS configuration
 - **Resource monitoring**: `usage` command shows CPU percentage and detailed cgroup info
 - **Attach support**: `attach` command provides interactive shell access to running containers
 - **Status command**: Shows comprehensive container information including log location
@@ -391,7 +391,6 @@ dbox recreate my-container \
   --tty \
   --privileged \
   --net host \
-  --no-overlayfs \
   --memory 2g \
   --cpu-shares 1024 \
   -e EDITOR=vim \
@@ -400,10 +399,13 @@ dbox recreate my-container \
 
 **How recreate works:**
 1. Reads original container configuration
-2. Applies any flag overrides you provide
-3. Preserves settings that aren't overridden
-4. Stops and recreates the container with new settings
-5. Preserves container data and filesystem changes
+2. Automatically detects original OverlayFS setting (preserves filesystem type)
+3. Applies any flag overrides you provide
+4. Preserves settings that aren't overridden
+5. Stops and recreates the container with new settings
+6. Preserves container data and filesystem changes
+
+**Note:** The `recreate` command automatically preserves the original OverlayFS setting to prevent conflicts between overlay and non-overlay filesystem types.
 
 ### Container Resource Usage Monitoring
 
@@ -456,8 +458,7 @@ The CPU percentage is calculated as: `(usage_time / elapsed_time) * 100 / cpu_co
 dbox create -i alpine -n system-container \
   --init /sbin/init \
   --privileged \
-  --net host \
-  --no-overlayfs
+  --net host
 
 # Development environment with resource limits
 dbox create -i ubuntu:22.04 -n dev-env \
@@ -493,8 +494,7 @@ dbox usage dev-env        # Monitor development container performance
 dbox create -i alpine -n system \
   --init /sbin/init \
   --privileged \
-  --net host \
-  --no-overlayfs
+  --net host
 
 dbox start system
 
@@ -819,7 +819,6 @@ dbox recreate [container-name] [flags]
   --container-config string     Override container_config.json
 
   -e, --env strings            Override environment variables
-  --no-overlayfs               Override OverlayFS setting
   --init string                Override init process
   --privileged                 Override privileged mode
   --net string                 Override network namespace

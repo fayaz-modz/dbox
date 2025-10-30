@@ -96,7 +96,7 @@ func main() {
 	rootCmd.PersistentFlags().StringVarP(&configPath, "config", "c",
 		getEnvOrDefault("DBOX_CONFIG", "/etc/dbox/config.yaml"),
 		"Path to config file (or set DBOX_CONFIG env)")
-	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output with debug messages")
+	rootCmd.PersistentFlags().BoolVar(&verbose, "verbose", false, "Enable verbose output with debug messages")
 
 	// Commands
 	rootCmd.AddCommand(
@@ -244,7 +244,6 @@ func recreateCmd() *cobra.Command {
 		image        string
 		containerCfg string
 		envs         []string
-		noOverlayFS  bool
 		cpuQuota     int64
 		cpuPeriod    int64
 		memoryLimit  int64
@@ -270,7 +269,6 @@ func recreateCmd() *cobra.Command {
 				Image:           image,
 				ContainerConfig: containerCfg,
 				Envs:            envs,
-				NoOverlayFS:     noOverlayFS,
 				CPUQuota:        cpuQuota,
 				CPUPeriod:       cpuPeriod,
 				MemoryLimit:     memoryLimit,
@@ -291,7 +289,6 @@ func recreateCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&image, "image", "i", "", "Override image (e.g., alpine:latest)")
 	cmd.Flags().StringVar(&containerCfg, "container-config", "", "Override container_config.json")
 	cmd.Flags().StringArrayVarP(&envs, "env", "e", []string{}, "Override environment variables (e.g., -e FOO=bar)")
-	cmd.Flags().BoolVar(&noOverlayFS, "no-overlayfs", false, "Override OverlayFS setting")
 	cmd.Flags().Int64Var(&cpuQuota, "cpu-quota", 0, "Override CPU quota in microseconds")
 	cmd.Flags().Int64Var(&cpuPeriod, "cpu-period", 0, "Override CPU period in microseconds")
 	cmd.Flags().Int64Var(&memoryLimit, "memory", 0, "Override memory limit in bytes")
