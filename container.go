@@ -10,10 +10,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/v1"
@@ -709,42 +709,6 @@ func getTTYMinor(tty string) int64 {
 	return 0
 }
 
-func (cm *ContainerManager) createTTYDevices(bundlePath, rootPathForSpec string, ttyDevices []string) error {
-	// Create /dev directory in container if it doesn't exist
-	devPath := filepath.Join(bundlePath, rootPathForSpec, "dev")
-	fmt.Printf("DEBUG: Creating /dev directory at %s\n", devPath)
-	if err := os.MkdirAll(devPath, 0755); err != nil {
-		return fmt.Errorf("failed to create /dev directory: %w", err)
-	}
-
-	// Create TTY device nodes
-	for _, tty := range ttyDevices {
-		devicePath := filepath.Join(devPath, tty)
-		minor := getTTYMinor(tty)
-		major := int64(4)
-
-		fmt.Printf("DEBUG: Creating device node %s with major %d, minor %d\n", devicePath, major, minor)
-
-		// Create character device node using mknod
-		dev := int((major << 8) | minor)
-		if err := syscall.Mknod(devicePath, syscall.S_IFCHR|0600, dev); err != nil {
-			fmt.Printf("DEBUG: mknod failed for %s: %v, trying fallback\n", devicePath, err)
-			// If mknod fails, try creating as a regular file as fallback
-			// This allows the container to start even if we can't create real device nodes
-			if file, err := os.Create(devicePath); err == nil {
-				file.Close()
-				fmt.Printf("Warning: Created fallback file for %s (device node creation failed)\n", devicePath)
-			} else {
-				return fmt.Errorf("failed to create device node %s: %w", devicePath, err)
-			}
-		} else {
-			fmt.Printf("DEBUG: Successfully created device node %s\n", devicePath)
-		}
-	}
-
-	return nil
-}
-
 func (cm *ContainerManager) Create(opts *CreateOptions) error {
 	fmt.Printf("Creating container '%s' from image '%s'...\n", opts.Name, opts.Image)
 	containerPath := filepath.Join(cm.cfg.ContainersPath, opts.Name)
@@ -1038,11 +1002,8 @@ func (cm *ContainerManager) Recreate(name string) error {
 
 		hasPrivilegedCaps := false
 		for _, privCap := range privilegedCaps {
-			for _, cap := range originalSpec.Process.Capabilities.Permitted {
-				if cap == privCap {
-					hasPrivilegedCaps = true
-					break
-				}
+			if slices.Contains(originalSpec.Process.Capabilities.Permitted, privCap) {
+				hasPrivilegedCaps = true
 			}
 			if hasPrivilegedCaps {
 				break
@@ -1211,11 +1172,8 @@ func (cm *ContainerManager) RecreateWithOptions(opts *RecreateOptions) error {
 				"CAP_AUDIT_CONTROL", "CAP_MAC_ADMIN", "CAP_MAC_OVERRIDE"}
 			hasPrivilegedCaps := false
 			for _, cap := range originalSpec.Process.Capabilities.Permitted {
-				for _, privCap := range privilegedCaps {
-					if cap == privCap {
-						hasPrivilegedCaps = true
-						break
-					}
+				if slices.Contains(privilegedCaps, cap) {
+					hasPrivilegedCaps = true
 				}
 				if hasPrivilegedCaps {
 					break
@@ -1509,8 +1467,8 @@ func (cm *ContainerManager) findCgroupPathForPID(pid int) (string, error) {
 		return "", err
 	}
 
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(string(data), "\n")
+	for line := range lines {
 		if strings.Contains(line, "0::") {
 			// cgroup v2 format: 0::/path/to/cgroup
 			parts := strings.Split(line, "::")
@@ -1536,8 +1494,8 @@ func (cm *ContainerManager) getCPUUsage(cgroupPath string) (string, error) {
 	// Try cgroup v2 first
 	cpuStatFile := filepath.Join(cgroupPath, "cpu.stat")
 	if data, err := os.ReadFile(cpuStatFile); err == nil {
-		lines := strings.Split(string(data), "\n")
-		for _, line := range lines {
+		lines := strings.SplitSeq(string(data), "\n")
+		for line := range lines {
 			if strings.HasPrefix(line, "usage_usec ") {
 				parts := strings.Fields(line)
 				if len(parts) >= 2 {

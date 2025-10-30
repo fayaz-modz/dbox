@@ -379,15 +379,6 @@ func (r *Runtime) Version() (string, error) {
 	return strings.TrimSpace(string(output)), nil
 }
 
-func (r *Runtime) startContainerWithLogging(containerID, logPath string, detach bool) error {
-	// For recreated containers, we should use Run instead of Start to properly capture output
-	// Find the container bundle path
-	bundlePath := filepath.Join(r.cfg.ContainersPath, containerID)
-
-	// Use the Run method which properly handles both runtime and container output
-	return r.Run(containerID, bundlePath, detach, logPath)
-}
-
 func (r *Runtime) waitForState(containerID, expectedState string) error {
 	const (
 		maxRetries   = 30
@@ -397,7 +388,7 @@ func (r *Runtime) waitForState(containerID, expectedState string) error {
 
 	start := time.Now()
 
-	for i := 0; i < maxRetries; i++ {
+	for range maxRetries {
 		state, err := r.State(containerID)
 		if err != nil {
 			// If container doesn't exist anymore, consider it stopped
