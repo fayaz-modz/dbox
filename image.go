@@ -126,9 +126,10 @@ func (pt *progressTransport) RoundTrip(req *http.Request) (*http.Response, error
 }
 
 func (im *ImageManager) Pull(imageRef string) error {
-	fmt.Printf("Pulling image: %s\n", imageRef)
-
+	logInfo("Pulling image: %s", imageRef)
+	logDebug("Resolving image reference...")
 	imageRef = im.resolveImageRef(imageRef)
+	logDebug("Resolved to: %s", imageRef)
 
 	ref, err := name.ParseReference(imageRef)
 	if err != nil {
@@ -149,7 +150,7 @@ func (im *ImageManager) Pull(imageRef string) error {
 		Architecture: runtime.GOARCH,
 	}
 
-	fmt.Printf("Requesting image for platform: %s/%s\n", platform.OS, platform.Architecture)
+	logVerbose("Requesting image for platform: %s/%s", platform.OS, platform.Architecture)
 
 	// Pull the image using our custom transport.
 	img, err := remote.Image(ref,
@@ -162,15 +163,17 @@ func (im *ImageManager) Pull(imageRef string) error {
 	}
 
 	imagePath := im.getImagePath(imageRef)
+	logDebug("Image path: %s", imagePath)
 	if err := os.MkdirAll(imagePath, 0755); err != nil {
 		return fmt.Errorf("failed to create image directory: %w", err)
 	}
 
+	logVerbose("Exporting image...")
 	if err := im.exportImage(img, imagePath); err != nil {
 		return fmt.Errorf("failed to export image: %w", err)
 	}
 
-	fmt.Printf("Successfully pulled: %s\n", imageRef)
+	logInfo("Successfully pulled: %s", imageRef)
 	return nil
 }
 
@@ -215,6 +218,8 @@ func (im *ImageManager) exportImage(img v1.Image, destPath string) error {
 		return fmt.Errorf("failed to get image layers: %w", err)
 	}
 
+	logDebug("Found %d layers to extract", len(layers))
+
 	// Create rootfs directory
 	rootfsPath := filepath.Join(destPath, "rootfs")
 	if err := os.MkdirAll(rootfsPath, 0755); err != nil {
@@ -222,15 +227,16 @@ func (im *ImageManager) exportImage(img v1.Image, destPath string) error {
 	}
 
 	// Extract each layer
-	fmt.Printf("Extracting %d layers...\n", len(layers))
+	logVerbose("Extracting %d layers...", len(layers))
 	for i, layer := range layers {
-		fmt.Printf("  Layer %d/%d...\n", i+1, len(layers))
+		logVerbose("Extracting layer %d/%d...", i+1, len(layers))
 		if err := im.extractLayer(layer, rootfsPath); err != nil {
 			return fmt.Errorf("failed to extract layer %d: %w", i, err)
 		}
 	}
 
 	// Save image config
+	logDebug("Saving image config...")
 	configFile, err := img.ConfigFile()
 	if err != nil {
 		return fmt.Errorf("failed to get image config: %w", err)
@@ -242,7 +248,11 @@ func (im *ImageManager) exportImage(img v1.Image, destPath string) error {
 		return err
 	}
 
-	return os.WriteFile(configPath, configData, 0644)
+	if err := os.WriteFile(configPath, configData, 0644); err != nil {
+		return err
+	}
+	logDebug("Image config saved to: %s", configPath)
+	return nil
 }
 
 func (im *ImageManager) extractLayer(layer v1.Layer, destPath string) error {
@@ -309,22 +319,28 @@ func (im *ImageManager) extractLayer(layer v1.Layer, destPath string) error {
 }
 
 func (im *ImageManager) GetRootfs(imageRef string) (string, error) {
+	logDebug("Getting rootfs for image: %s", imageRef)
 	imageRef = im.resolveImageRef(imageRef)
 	imagePath := im.getImagePath(imageRef)
 	rootfsPath := filepath.Join(imagePath, "rootfs")
+	logDebug("Checking rootfs path: %s", rootfsPath)
 
 	if _, err := os.Stat(rootfsPath); os.IsNotExist(err) {
+		logDebug("Image not found locally")
 		return "", fmt.Errorf("image not found locally, please pull it first")
 	}
 
+	logDebug("Found local rootfs")
 	return rootfsPath, nil
 }
 
 func (im *ImageManager) List() ([]string, error) {
+	logDebug("Listing local images")
 	imagesDir := filepath.Join(im.cfg.ContainersPath, ".images")
 	entries, err := os.ReadDir(imagesDir)
 	if err != nil {
 		if os.IsNotExist(err) {
+			logDebug("No images directory found")
 			return []string{}, nil
 		}
 		return nil, err
@@ -337,23 +353,26 @@ func (im *ImageManager) List() ([]string, error) {
 		}
 	}
 
+	logDebug("Found %d local images", len(images))
 	return images, nil
 }
 
 func (im *ImageManager) CleanCache() error {
+	logInfo("Cleaning image cache...")
 	cachePath := filepath.Join(im.cfg.ContainersPath, ".images")
+	logDebug("Cache path: %s", cachePath)
 
 	if _, err := os.Stat(cachePath); os.IsNotExist(err) {
-		fmt.Println("Image cache is already clean (directory not found).")
+		logInfo("Image cache is already clean (directory not found).")
 		return nil
 	}
 
-	fmt.Printf("Removing image cache: %s\n", cachePath)
+	logVerbose("Removing image cache: %s", cachePath)
 
 	if err := os.RemoveAll(cachePath); err != nil {
 		return fmt.Errorf("failed to remove image cache directory: %w", err)
 	}
 
-	fmt.Println("Successfully cleaned image cache.")
+	logInfo("Successfully cleaned image cache.")
 	return nil
 }

@@ -710,7 +710,9 @@ func getTTYMinor(tty string) int64 {
 }
 
 func (cm *ContainerManager) Create(opts *CreateOptions) error {
-	fmt.Printf("Creating container '%s' from image '%s'...\n", opts.Name, opts.Image)
+	logInfo("Creating container '%s' from image '%s'...", opts.Name, opts.Image)
+	logDebug("Container path: %s", filepath.Join(cm.cfg.ContainersPath, opts.Name))
+
 	containerPath := filepath.Join(cm.cfg.ContainersPath, opts.Name)
 	if _, err := os.Stat(containerPath); !os.IsNotExist(err) {
 		return fmt.Errorf("container '%s' already exists", opts.Name)
@@ -718,9 +720,11 @@ func (cm *ContainerManager) Create(opts *CreateOptions) error {
 	if err := os.MkdirAll(containerPath, 0755); err != nil {
 		return fmt.Errorf("failed to create container directory: %w", err)
 	}
+
+	logVerbose("Checking for local image...")
 	rootfsSource, err := cm.imgMgr.GetRootfs(opts.Image)
 	if err != nil {
-		fmt.Printf("Image not found locally, pulling automatically...\n")
+		logVerbose("Image not found locally, pulling automatically...")
 		if err := cm.imgMgr.Pull(opts.Image); err != nil {
 			return fmt.Errorf("failed to pull image: %w", err)
 		}
@@ -729,13 +733,13 @@ func (cm *ContainerManager) Create(opts *CreateOptions) error {
 			return err
 		}
 	} else {
-		fmt.Println("Using cached image...")
+		logVerbose("Using cached image...")
 	}
 	imagePath := filepath.Dir(rootfsSource)
 	bundlePath := containerPath
 	var rootPathForSpec string
 	if opts.NoOverlayFS {
-		fmt.Println("OverlayFS disabled. Copying rootfs...")
+		logVerbose("OverlayFS disabled. Copying rootfs...")
 		rootfsDest := filepath.Join(bundlePath, "rootfs")
 		if err := os.MkdirAll(rootfsDest, 0755); err != nil {
 			return fmt.Errorf("failed to create rootfs directory: %w", err)
@@ -745,7 +749,7 @@ func (cm *ContainerManager) Create(opts *CreateOptions) error {
 		}
 		rootPathForSpec = "rootfs"
 	} else {
-		fmt.Println("Setting up OverlayFS mount...")
+		logVerbose("Setting up OverlayFS mount...")
 		_, err := cm.mountOverlayFS(containerPath, rootfsSource)
 		if err != nil {
 			os.RemoveAll(containerPath)
@@ -757,7 +761,7 @@ func (cm *ContainerManager) Create(opts *CreateOptions) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println("Generating OCI config...")
+	logVerbose("Generating OCI config...")
 	if err := cm.generateOCISpecUsingRuntime(bundlePath, imagePath, opts.Name, opts, nil, containerCfg, rootPathForSpec); err != nil {
 		if !opts.NoOverlayFS {
 			cm.unmountOverlayFS(containerPath)
@@ -769,11 +773,11 @@ func (cm *ContainerManager) Create(opts *CreateOptions) error {
 	metadataPath := filepath.Join(containerPath, "metadata.json")
 	metadataData, _ := json.MarshalIndent(metadata, "", "  ")
 	os.WriteFile(metadataPath, metadataData, 0644)
-	fmt.Println("Creating OCI container...")
+	logVerbose("Creating OCI container...")
 	if err := cm.runtime.Create(opts.Name, bundlePath); err != nil {
 		return fmt.Errorf("failed to create container: %w", err)
 	}
-	fmt.Printf("Container '%s' created successfully!\n", opts.Name)
+	logInfo("Container '%s' created successfully!", opts.Name)
 	return nil
 }
 
@@ -878,6 +882,7 @@ func (cm *ContainerManager) Start(name string, detach bool) error {
 }
 
 func (cm *ContainerManager) Stop(name string, force bool) error {
+	logInfo("Stopping container '%s' (force=%v)", name, force)
 	logPath := filepath.Join(cm.cfg.RunPath, "logs", name+".log")
 	logger := NewDboxLogger(logPath)
 	defer logger.Close()
@@ -886,15 +891,17 @@ func (cm *ContainerManager) Stop(name string, force bool) error {
 	err := cm.runtime.Stop(name, force)
 	if err != nil {
 		logger.Log(fmt.Sprintf("Failed to stop container '%s': %v", name, err))
+		logVerbose("Failed to stop container '%s': %v", name, err)
 	} else {
 		logger.Log(fmt.Sprintf("Successfully stopped container '%s'", name))
+		logVerbose("Successfully stopped container '%s'", name)
 	}
 
 	return err
 }
 
 func (cm *ContainerManager) Recreate(name string) error {
-	fmt.Printf("Recreating container '%s'...\n", name)
+	logInfo("Recreating container '%s'...", name)
 
 	// Get container path
 	containerPath := filepath.Join(cm.cfg.ContainersPath, name)
@@ -922,7 +929,7 @@ func (cm *ContainerManager) Recreate(name string) error {
 	// Stop the container if it's running
 	state, err := cm.runtime.State(name)
 	if err == nil && (state == "running" || state == "creating" || state == "paused") {
-		fmt.Printf("Stopping container '%s'...\n", name)
+		logVerbose("Stopping container '%s' before recreate...", name)
 		if err := cm.runtime.Stop(name, true); err != nil {
 			fmt.Printf("Warning: failed to stop container: %v\n", err)
 		}

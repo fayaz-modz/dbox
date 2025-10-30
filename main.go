@@ -17,6 +17,7 @@ import (
 
 var (
 	configPath string
+	verbose    bool
 	cfg        *Config
 )
 
@@ -52,6 +53,28 @@ func (l *DboxLogger) Close() {
 	}
 }
 
+func logInfo(format string, args ...interface{}) {
+	fmt.Printf("dbox: "+format+"\n", args...)
+}
+
+func logVerbose(format string, args ...interface{}) {
+	if verbose {
+		fmt.Printf("dbox: "+format+"\n", args...)
+	}
+}
+
+func logDebug(format string, args ...interface{}) {
+	if verbose {
+		fmt.Printf("dbox: DEBUG: "+format+"\n", args...)
+	}
+}
+
+func logCommand(cmd string, args []string) {
+	if verbose {
+		fmt.Printf("dbox: RUNNING: %s %s\n", cmd, strings.Join(args, " "))
+	}
+}
+
 func main() {
 	rootCmd := &cobra.Command{
 		Use:   "dbox",
@@ -73,6 +96,7 @@ func main() {
 	rootCmd.PersistentFlags().StringVarP(&configPath, "config", "c",
 		getEnvOrDefault("DBOX_CONFIG", "/etc/dbox/config.yaml"),
 		"Path to config file (or set DBOX_CONFIG env)")
+	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable verbose output with debug messages")
 
 	// Commands
 	rootCmd.AddCommand(
