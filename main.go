@@ -157,6 +157,8 @@ func createCmd() *cobra.Command {
 				ContainerConfig: containerCfg,
 				SetupScript:     setupScript,
 				PostSetupScript: postSetupScript,
+				Envs:            envs,
+				NoOverlayFS:     noOverlayFS,
 				CPUQuota:        cpuQuota,
 				CPUPeriod:       cpuPeriod,
 				MemoryLimit:     memoryLimit,

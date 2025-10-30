@@ -415,7 +415,7 @@ func (cm *ContainerManager) generateOCISpecUsingRuntime(bundlePath, imagePath, n
 		capsToAdd = append(capsToAdd, "CAP_SYS_ADMIN", "CAP_NET_ADMIN", "CAP_SYS_PTRACE",
 			"CAP_SYS_MODULE", "CAP_DAC_READ_SEARCH", "CAP_SYS_RAWIO", "CAP_SYS_TIME",
 			"CAP_AUDIT_CONTROL", "CAP_AUDIT_WRITE", "CAP_MAC_ADMIN", "CAP_MAC_OVERRIDE",
-			"CAP_SYS_TTY_CONFIG")
+			"CAP_SYS_TTY_CONFIG", "CAP_FOWNER")
 	}
 
 	existingCaps := make(map[string]bool)
@@ -448,6 +448,10 @@ func (cm *ContainerManager) generateOCISpecUsingRuntime(bundlePath, imagePath, n
 			ociSpec.Linux.Seccomp = nil
 		}
 	}
+
+	// Set noNewPrivileges
+	ociSpec.Process.NoNewPrivileges = !privileged
+
 	ociSpec.Mounts = append(ociSpec.Mounts, spec.Mount{
 		Destination: "/tmp", Type: "tmpfs", Source: "tmpfs",
 		Options: []string{"nosuid", "strictatime", "mode=1777", "size=65536k"},
