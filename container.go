@@ -407,7 +407,7 @@ func (cm *ContainerManager) generateOCISpecUsingRuntime(bundlePath, imagePath, n
 	capsToAdd := []string{"CAP_CHOWN", "CAP_DAC_OVERRIDE", "CAP_SETUID", "CAP_SETGID"}
 	if privileged {
 		// Add all capabilities for privileged mode
-		capsToAdd = append(capsToAdd, "CAP_SYS_ADMIN", "CAP_NET_ADMIN", "CAP_SYS_PTRACE",
+		capsToAdd = append(capsToAdd, "CAP_SYS_ADMIN", "CAP_NET_ADMIN", "CAP_NET_RAW", "CAP_SYS_PTRACE",
 			"CAP_SYS_MODULE", "CAP_DAC_READ_SEARCH", "CAP_SYS_RAWIO", "CAP_SYS_TIME",
 			"CAP_AUDIT_CONTROL", "CAP_AUDIT_WRITE", "CAP_MAC_ADMIN", "CAP_MAC_OVERRIDE",
 			"CAP_SYS_TTY_CONFIG", "CAP_FOWNER", "CAP_SYS_CHROOT")
@@ -444,6 +444,26 @@ func (cm *ContainerManager) generateOCISpecUsingRuntime(bundlePath, imagePath, n
 				DefaultAction: spec.ActAllow,
 			}
 			ociSpec.Process.NoNewPrivileges = false
+			// Remove readonly paths to allow writing to /proc/sys for network configuration
+			ociSpec.Linux.ReadonlyPaths = nil
+			// Make /sys writable for privileged containers
+			for i := range ociSpec.Mounts {
+				if ociSpec.Mounts[i].Destination == "/sys" {
+					for j, opt := range ociSpec.Mounts[i].Options {
+						if opt == "ro" {
+							ociSpec.Mounts[i].Options[j] = "rw"
+							break
+						}
+					}
+				}
+			}
+			// Allow all devices for full permissions
+			ociSpec.Linux.Resources.Devices = []spec.LinuxDeviceCgroup{
+				{
+					Allow:  true,
+					Access: "rwm",
+				},
+			}
 		}
 	}
 
