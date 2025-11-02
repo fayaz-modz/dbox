@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -54,17 +53,17 @@ func (l *DboxLogger) Close() {
 	}
 }
 
-func logInfo(format string, args ...interface{}) {
+func logInfo(format string, args ...any) {
 	fmt.Printf("dbox: "+format+"\n", args...)
 }
 
-func logVerbose(format string, args ...interface{}) {
+func logVerbose(format string, args ...any) {
 	if verbose {
 		fmt.Printf("dbox: "+format+"\n", args...)
 	}
 }
 
-func logDebug(format string, args ...interface{}) {
+func logDebug(format string, args ...any) {
 	if verbose {
 		fmt.Printf("dbox: DEBUG: "+format+"\n", args...)
 	}
@@ -196,6 +195,35 @@ func createCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&privileged, "privileged", false, "Run container in privileged mode")
 	cmd.Flags().StringVar(&netNamespace, "net", "host", "Network namespace (host, none, or container:name)")
 	cmd.Flags().BoolVarP(&tty, "tty", "t", false, "Allocate a pseudo-TTY for interactive sessions")
+
+	cmd.RegisterFlagCompletionFunc("image", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		var config *Config
+		var err error
+		config, err = LoadConfig(configPath)
+		if err != nil {
+			// Try local config.yaml
+			config, err = LoadConfig("config.yaml")
+			if err != nil {
+				return nil, cobra.ShellCompDirectiveNoFileComp
+			}
+		}
+		im := NewImageManager(config)
+		images, err := im.List()
+		if err != nil {
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		}
+		// Convert sanitized names back to approximate image refs
+		var imageRefs []string
+		for _, img := range images {
+			ref := strings.ReplaceAll(img, "_", "/")
+			if lastSlash := strings.LastIndex(ref, "/"); lastSlash != -1 {
+				ref = ref[:lastSlash] + ":" + ref[lastSlash+1:]
+			}
+			imageRefs = append(imageRefs, ref)
+		}
+		return imageRefs, cobra.ShellCompDirectiveNoFileComp
+	})
+
 	cmd.MarkFlagRequired("image")
 	cmd.MarkFlagRequired("name")
 
@@ -360,6 +388,38 @@ func pullCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringArrayVar(&dns, "dns", []string{}, "DNS servers to use for image pulls (e.g., --dns 1.1.1.1 --dns 8.8.8.8)")
+
+	cmd.ValidArgsFunction = func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		if len(args) >= 1 {
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		}
+		var config *Config
+		var err error
+		config, err = LoadConfig(configPath)
+		if err != nil {
+			// Try local config.yaml
+			config, err = LoadConfig("config.yaml")
+			if err != nil {
+				return nil, cobra.ShellCompDirectiveNoFileComp
+			}
+		}
+		im := NewImageManager(config)
+		images, err := im.List()
+		if err != nil {
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		}
+		// Convert sanitized names back to approximate image refs
+		var imageRefs []string
+		for _, img := range images {
+			ref := strings.ReplaceAll(img, "_", "/")
+			if lastSlash := strings.LastIndex(ref, "/"); lastSlash != -1 {
+				ref = ref[:lastSlash] + ":" + ref[lastSlash+1:]
+			}
+			imageRefs = append(imageRefs, ref)
+		}
+		return imageRefs, cobra.ShellCompDirectiveNoFileComp
+	}
+
 	return cmd
 }
 
@@ -577,6 +637,11 @@ func setupCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVarP(&scriptPath, "script", "s", "", "Path to setup script")
+
+	cmd.RegisterFlagCompletionFunc("script", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		return nil, cobra.ShellCompDirectiveDefault // Allow file completion
+	})
+
 	cmd.MarkFlagRequired("script")
 
 	return cmd
@@ -601,17 +666,6 @@ func getEnvOrDefault(key, defaultVal string) string {
 		return val
 	}
 	return defaultVal
-}
-
-func promptYesNo(question string) bool {
-	reader := bufio.NewReader(os.Stdin)
-	fmt.Printf("%s (y/N): ", question)
-	response, err := reader.ReadString('\n')
-	if err != nil {
-		return false
-	}
-	response = strings.ToLower(strings.TrimSpace(response))
-	return response == "y" || response == "yes"
 }
 
 func attachCmd() *cobra.Command {
@@ -728,6 +782,32 @@ func scriptCmd() *cobra.Command {
 		},
 	}
 
+	cmd.ValidArgsFunction = func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		if len(args) == 0 {
+			// Complete container names for first argument
+			var config *Config
+			var err error
+			config, err = LoadConfig(configPath)
+			if err != nil {
+				// Try local config.yaml
+				config, err = LoadConfig("config.yaml")
+				if err != nil {
+					return nil, cobra.ShellCompDirectiveNoFileComp
+				}
+			}
+			cm := NewContainerManager(config)
+			names, err := cm.GetContainerNames()
+			if err != nil {
+				return nil, cobra.ShellCompDirectiveNoFileComp
+			}
+			return names, cobra.ShellCompDirectiveNoFileComp
+		} else if len(args) == 1 {
+			// Allow file completion for script path
+			return nil, cobra.ShellCompDirectiveDefault
+		}
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+
 	return cmd
 }
 
@@ -770,7 +850,7 @@ fish:
 `,
 		DisableAutoGenTag: true,
 		ValidArgs:         []string{"bash", "zsh", "fish"},
-		Args:              cobra.ExactValidArgs(1),
+		Args:              cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
 	}
 
 	// Disable config loading for completion and its subcommands

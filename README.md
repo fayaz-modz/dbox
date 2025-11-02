@@ -1121,13 +1121,24 @@ complete -F _dbox dbox-sudo
 
 **For Zsh with sudo:**
 ```bash
-# Generate completion for zsh
-dbox completion zsh > ~/.zsh/_dbox
+# Create completion directory
+mkdir -p ~/.zsh/completions
 
-# Add to your ~/.zshrc
-echo "fpath=(~/.zsh \$fpath)" >> ~/.zshrc
+# Generate completion for zsh
+dbox completion zsh > ~/.zsh/completions/_dbox
+
+# Add to your ~/.zshrc (if not already present)
+echo "fpath=(~/.zsh/completions \$fpath)" >> ~/.zshrc
 echo "autoload -U compinit && compinit" >> ~/.zshrc
-echo "source ~/.zsh/_dbox" >> ~/.zshrc
+
+# Reload completion
+exec zsh
+```
+
+**Note:** If fzf completion interferes, you may need to disable fzf completion for dbox:
+```bash
+# Add to ~/.zshrc to disable fzf for dbox
+echo "zstyle ':fzf-tab:*' disabled-on 'dbox'" >> ~/.zshrc
 ```
 
 ### Container Won't Start

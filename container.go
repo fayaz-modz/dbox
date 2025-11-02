@@ -196,13 +196,37 @@ func (cm *ContainerManager) Run(opts *RunOptions) error {
 		return fmt.Errorf("failed to create container directory: %w", err)
 	}
 
+	// Track cleanup state
+	overlayMounted := false
+	containerCreated := true
+
+	// Cleanup function for failures
+	cleanup := func() {
+		if overlayMounted && !opts.NoOverlayFS {
+			cm.unmountOverlayFS(containerPath)
+		}
+		if containerCreated {
+			os.RemoveAll(containerPath)
+		}
+	}
+
+	// Defer cleanup - will only run if we return with error
+	defer func() {
+		if r := recover(); r != nil {
+			cleanup()
+			panic(r) // Re-panic after cleanup
+		}
+	}()
+
 	rootfsSource, err := cm.imgMgr.GetRootfs(opts.Image)
 	if err != nil {
 		if err := cm.imgMgr.Pull(opts.Image); err != nil {
+			cleanup()
 			return fmt.Errorf("failed to pull image: %w", err)
 		}
 		rootfsSource, err = cm.imgMgr.GetRootfs(opts.Image)
 		if err != nil {
+			cleanup()
 			return err
 		}
 	}
@@ -214,9 +238,11 @@ func (cm *ContainerManager) Run(opts *RunOptions) error {
 		fmt.Println("OverlayFS disabled. Copying rootfs...")
 		rootfsDest := filepath.Join(bundlePath, "rootfs")
 		if err := os.MkdirAll(rootfsDest, 0755); err != nil {
+			cleanup()
 			return fmt.Errorf("failed to create rootfs directory: %w", err)
 		}
 		if err := copyDirWithProgress(rootfsSource, rootfsDest); err != nil {
+			cleanup()
 			return fmt.Errorf("failed to copy rootfs: %w", err)
 		}
 		rootPathForSpec = "rootfs"
@@ -224,9 +250,10 @@ func (cm *ContainerManager) Run(opts *RunOptions) error {
 		fmt.Println("Setting up OverlayFS mount...")
 		_, err := cm.mountOverlayFS(containerPath, rootfsSource)
 		if err != nil {
-			os.RemoveAll(containerPath)
+			cleanup()
 			return fmt.Errorf("failed to prepare container filesystem: %w", err)
 		}
+		overlayMounted = true
 		rootPathForSpec = "merged"
 	}
 
@@ -241,6 +268,7 @@ func (cm *ContainerManager) Run(opts *RunOptions) error {
 
 	containerCfg, err := LoadContainerConfig(opts.ContainerConfig)
 	if err != nil {
+		cleanup()
 		return err
 	}
 
@@ -255,10 +283,7 @@ func (cm *ContainerManager) Run(opts *RunOptions) error {
 	}
 
 	if err := cm.generateOCISpecUsingRuntime(bundlePath, imagePath, opts.Name, createOpts, opts, containerCfg, rootPathForSpec); err != nil {
-		if !opts.NoOverlayFS {
-			cm.unmountOverlayFS(containerPath)
-		}
-		os.RemoveAll(containerPath)
+		cleanup()
 		return fmt.Errorf("failed to generate OCI spec: %w", err)
 	}
 
@@ -267,6 +292,7 @@ func (cm *ContainerManager) Run(opts *RunOptions) error {
 	if opts.Detach {
 		logDir := filepath.Join(cm.cfg.RunPath, "logs")
 		if err := os.MkdirAll(logDir, 0750); err != nil {
+			cleanup()
 			return fmt.Errorf("failed to create log directory: %w", err)
 		}
 		logPath = filepath.Join(logDir, opts.Name+".log")
@@ -289,6 +315,10 @@ func (cm *ContainerManager) Run(opts *RunOptions) error {
 		cm.Delete(opts.Name, true)
 		return err
 	}
+
+	// Success - don't run cleanup
+	containerCreated = false
+	overlayMounted = false
 
 	if opts.Detach {
 		fmt.Println(opts.Name)
@@ -840,15 +870,39 @@ func (cm *ContainerManager) Create(opts *CreateOptions) error {
 		return fmt.Errorf("failed to create container directory: %w", err)
 	}
 
+	// Track cleanup state
+	overlayMounted := false
+	containerCreated := true
+
+	// Cleanup function for failures
+	cleanup := func() {
+		if overlayMounted && !opts.NoOverlayFS {
+			cm.unmountOverlayFS(containerPath)
+		}
+		if containerCreated {
+			os.RemoveAll(containerPath)
+		}
+	}
+
+	// Defer cleanup - will only run if we return with error
+	defer func() {
+		if r := recover(); r != nil {
+			cleanup()
+			panic(r) // Re-panic after cleanup
+		}
+	}()
+
 	logVerbose("Checking for local image...")
 	rootfsSource, err := cm.imgMgr.GetRootfs(opts.Image)
 	if err != nil {
 		logVerbose("Image not found locally, pulling automatically...")
 		if err := cm.imgMgr.Pull(opts.Image); err != nil {
+			cleanup()
 			return fmt.Errorf("failed to pull image: %w", err)
 		}
 		rootfsSource, err = cm.imgMgr.GetRootfs(opts.Image)
 		if err != nil {
+			cleanup()
 			return err
 		}
 	} else {
@@ -861,9 +915,11 @@ func (cm *ContainerManager) Create(opts *CreateOptions) error {
 		logVerbose("OverlayFS disabled. Copying rootfs...")
 		rootfsDest := filepath.Join(bundlePath, "rootfs")
 		if err := os.MkdirAll(rootfsDest, 0755); err != nil {
+			cleanup()
 			return fmt.Errorf("failed to create rootfs directory: %w", err)
 		}
 		if err := copyDirWithProgress(rootfsSource, rootfsDest); err != nil {
+			cleanup()
 			return fmt.Errorf("failed to copy rootfs: %w", err)
 		}
 		rootPathForSpec = "rootfs"
@@ -871,21 +927,20 @@ func (cm *ContainerManager) Create(opts *CreateOptions) error {
 		logVerbose("Setting up OverlayFS mount...")
 		_, err := cm.mountOverlayFS(containerPath, rootfsSource)
 		if err != nil {
-			os.RemoveAll(containerPath)
+			cleanup()
 			return fmt.Errorf("failed to prepare container filesystem: %w", err)
 		}
+		overlayMounted = true
 		rootPathForSpec = "merged"
 	}
 	containerCfg, err := LoadContainerConfig(opts.ContainerConfig)
 	if err != nil {
+		cleanup()
 		return err
 	}
 	logVerbose("Generating OCI config...")
 	if err := cm.generateOCISpecUsingRuntime(bundlePath, imagePath, opts.Name, opts, nil, containerCfg, rootPathForSpec); err != nil {
-		if !opts.NoOverlayFS {
-			cm.unmountOverlayFS(containerPath)
-		}
-		os.RemoveAll(containerPath)
+		cleanup()
 		return fmt.Errorf("failed to generate OCI spec: %w", err)
 	}
 
@@ -893,17 +948,11 @@ func (cm *ContainerManager) Create(opts *CreateOptions) error {
 	optionsPath := filepath.Join(containerPath, "options.json")
 	optionsData, err := json.MarshalIndent(opts, "", "  ")
 	if err != nil {
-		if !opts.NoOverlayFS {
-			cm.unmountOverlayFS(containerPath)
-		}
-		os.RemoveAll(containerPath)
+		cleanup()
 		return fmt.Errorf("failed to marshal options: %w", err)
 	}
 	if err := os.WriteFile(optionsPath, optionsData, 0644); err != nil {
-		if !opts.NoOverlayFS {
-			cm.unmountOverlayFS(containerPath)
-		}
-		os.RemoveAll(containerPath)
+		cleanup()
 		return fmt.Errorf("failed to write options file: %w", err)
 	}
 
@@ -912,8 +961,30 @@ func (cm *ContainerManager) Create(opts *CreateOptions) error {
 	metadataData, _ := json.MarshalIndent(metadata, "", "  ")
 	os.WriteFile(metadataPath, metadataData, 0644)
 
+	// Success - don't run cleanup
+	containerCreated = false
+	overlayMounted = false
+
 	logInfo("Container '%s' created successfully!", opts.Name)
 	return nil
+}
+
+func (cm *ContainerManager) GetContainerNames() ([]string, error) {
+	entries, err := os.ReadDir(cm.cfg.ContainersPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []string{}, nil
+		}
+		return nil, err
+	}
+
+	var names []string
+	for _, entry := range entries {
+		if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
+			names = append(names, entry.Name())
+		}
+	}
+	return names, nil
 }
 
 func (cm *ContainerManager) List() error {
