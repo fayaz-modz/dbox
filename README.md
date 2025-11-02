@@ -910,7 +910,7 @@ dbox raw [runtime-args...]
 
 #### **completion** - Generate the autocompletion script for the specified shell
 ```bash
-dbox completion [bash|zsh|fish|powershell]
+dbox completion [bash|zsh|fish]
 ```
 
 **Note:** Completion works best when dbox is run as a regular user (see Group Setup). For sudo usage, see the "Shell Completion with sudo" section in Troubleshooting.
@@ -1117,6 +1117,17 @@ chmod +x ~/bin/dbox-sudo
 # Add to PATH and set up completion
 export PATH="$HOME/bin:$PATH"
 complete -F _dbox dbox-sudo
+```
+
+**For Zsh with sudo:**
+```bash
+# Generate completion for zsh
+dbox completion zsh > ~/.zsh/_dbox
+
+# Add to your ~/.zshrc
+echo "fpath=(~/.zsh \$fpath)" >> ~/.zshrc
+echo "autoload -U compinit && compinit" >> ~/.zshrc
+echo "source ~/.zsh/_dbox" >> ~/.zshrc
 ```
 
 ### Container Won't Start

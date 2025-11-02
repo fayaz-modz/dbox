@@ -758,6 +758,8 @@ Zsh:
   $ dbox completion zsh > "${fpath[1]}/_dbox"
 
   # You will need to start a new shell for this setup to take effect.
+  # Or reload completion in current session:
+  $ compinit
 
 fish:
 
@@ -765,17 +767,9 @@ fish:
 
   # To load completions for each session, execute once:
   $ dbox completion fish > ~/.config/fish/completions/dbox.fish
-
-PowerShell:
-
-  PS> dbox completion powershell | Out-String | Invoke-Expression
-
-  # To load completions for every new session, run:
-  PS> dbox completion powershell > dbox.ps1
-  # and source this file from your PowerShell profile.
 `,
 		DisableAutoGenTag: true,
-		ValidArgs:         []string{"bash", "zsh", "fish", "powershell"},
+		ValidArgs:         []string{"bash", "zsh", "fish"},
 		Args:              cobra.ExactValidArgs(1),
 	}
 
@@ -809,16 +803,7 @@ PowerShell:
 	}
 	fishCmd.PersistentPreRunE = nil
 
-	powershellCmd := &cobra.Command{
-		Use:   "powershell",
-		Short: "Generate the autocompletion script for powershell",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return rootCmd.GenPowerShellCompletionWithDesc(cmd.OutOrStdout())
-		},
-	}
-	powershellCmd.PersistentPreRunE = nil
-
-	cmd.AddCommand(bashCmd, zshCmd, fishCmd, powershellCmd)
+	cmd.AddCommand(bashCmd, zshCmd, fishCmd)
 
 	return cmd
 }
