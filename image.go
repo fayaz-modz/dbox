@@ -3,15 +3,18 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -137,8 +140,35 @@ func (im *ImageManager) Pull(imageRef string) error {
 	}
 
 	// --- START OF MODIFICATION ---
+	// Create optimized HTTP transport for faster downloads
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+
+	// Set custom DNS resolver if specified
+	if len(im.cfg.DNS) > 0 {
+		dnsServer := im.cfg.DNS[0] + ":53"
+		resolver := &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+				d := net.Dialer{Timeout: 5 * time.Second}
+				return d.DialContext(ctx, "udp", dnsServer)
+			},
+		}
+		dialer.Resolver = resolver
+	}
+
+	transport := &http.Transport{
+		DialContext:         dialer.DialContext,
+		MaxIdleConns:        100,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 10 * time.Second,
+	}
+
 	customTransport := &progressTransport{
-		underlying: http.DefaultTransport,
+		underlying: transport,
 	}
 
 	OS := runtime.GOOS
@@ -157,6 +187,7 @@ func (im *ImageManager) Pull(imageRef string) error {
 		remote.WithAuthFromKeychain(authn.DefaultKeychain),
 		remote.WithTransport(customTransport), // <-- USE OUR TRANSPORT HERE
 		remote.WithPlatform(platform),
+		remote.WithJobs(runtime.NumCPU()*2), // Increase concurrent downloads
 	)
 	if err != nil {
 		return fmt.Errorf("failed to pull image: %w", err)
@@ -170,6 +201,7 @@ func (im *ImageManager) Pull(imageRef string) error {
 
 	logVerbose("Exporting image...")
 	if err := im.exportImage(img, imagePath); err != nil {
+		os.RemoveAll(imagePath) // Cleanup on failure
 		return fmt.Errorf("failed to export image: %w", err)
 	}
 
@@ -327,6 +359,13 @@ func (im *ImageManager) GetRootfs(imageRef string) (string, error) {
 	if _, err := os.Stat(rootfsPath); os.IsNotExist(err) {
 		logVerbose("Image not found locally")
 		return "", fmt.Errorf("image not found locally")
+	}
+	// Check if config.json exists, otherwise it's corrupted
+	configPath := filepath.Join(imagePath, "config.json")
+	if _, err := os.Stat(configPath); os.IsNotExist(err) {
+		logVerbose("Image corrupted (missing config.json), removing")
+		os.RemoveAll(imagePath)
+		return "", fmt.Errorf("image corrupted, cleaned up")
 	}
 	logVerbose("Found local rootfs")
 	return rootfsPath, nil

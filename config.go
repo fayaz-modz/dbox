@@ -14,6 +14,7 @@ type Config struct {
 	RunPath        string            `yaml:"runpath" json:"runpath"`
 	ContainersPath string            `yaml:"containers_path" json:"containers_path"`
 	Registries     map[string]string `yaml:"registries,omitempty" json:"registries,omitempty"`
+	DNS            []string          `yaml:"dns,omitempty" json:"dns,omitempty"`
 }
 
 type ContainerConfig struct {

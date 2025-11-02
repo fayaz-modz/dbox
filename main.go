@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -81,6 +82,10 @@ func main() {
 		Short: "A distrobox-like container management tool",
 		Long:  "Manage OCI containers with crun/runc with advanced features",
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+			// Skip config loading for completion command
+			if cmd.Name() == "completion" || cmd.Parent() != nil && cmd.Parent().Name() == "completion" {
+				return nil
+			}
 			var err error
 			cfg, err = LoadConfig(configPath)
 			if err != nil {
@@ -118,6 +123,7 @@ func main() {
 		attachCmd(),
 		usageCmd(),
 		scriptCmd(),
+		completionCmd(rootCmd),
 	)
 
 	if err := rootCmd.Execute(); err != nil {
@@ -132,6 +138,7 @@ func createCmd() *cobra.Command {
 		containerCfg string
 		envs         []string
 		noOverlayFS  bool
+		dns          []string
 		cpuQuota     int64
 		cpuPeriod    int64
 		memoryLimit  int64
@@ -148,6 +155,7 @@ func createCmd() *cobra.Command {
 		Use:   "create [flags]",
 		Short: "Create a new container",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg.DNS = dns
 			cm := NewContainerManager(cfg)
 
 			opts := &CreateOptions{
@@ -177,6 +185,7 @@ func createCmd() *cobra.Command {
 	cmd.Flags().StringVar(&containerCfg, "container-config", "", "Path to container_config.json")
 	cmd.Flags().StringArrayVarP(&envs, "env", "e", []string{}, "Set environment variables (e.g., -e FOO=bar)")
 	cmd.Flags().BoolVar(&noOverlayFS, "no-overlayfs", false, "Disable OverlayFS and copy the rootfs (slower, but works on filesystems without overlay support)")
+	cmd.Flags().StringArrayVar(&dns, "dns", []string{}, "DNS servers to use for image pulls (e.g., --dns 1.1.1.1 --dns 8.8.8.8)")
 	cmd.Flags().Int64Var(&cpuQuota, "cpu-quota", 0, "CPU quota in microseconds (e.g., 50000 for 5% CPU)")
 	cmd.Flags().Int64Var(&cpuPeriod, "cpu-period", 0, "CPU period in microseconds (default 100000)")
 	cmd.Flags().Int64Var(&memoryLimit, "memory", 0, "Memory limit in bytes (e.g., 512m, 1g)")
@@ -186,7 +195,7 @@ func createCmd() *cobra.Command {
 	cmd.Flags().StringVar(&initProcess, "init", "", "Override init process (e.g., /sbin/init)")
 	cmd.Flags().BoolVar(&privileged, "privileged", false, "Run container in privileged mode")
 	cmd.Flags().StringVar(&netNamespace, "net", "host", "Network namespace (host, none, or container:name)")
-	cmd.Flags().BoolVar(&tty, "tty", false, "Allocate TTY devices (needed for some init systems)")
+	cmd.Flags().BoolVarP(&tty, "tty", "t", false, "Allocate a pseudo-TTY for interactive sessions")
 	cmd.MarkFlagRequired("image")
 	cmd.MarkFlagRequired("name")
 
@@ -244,6 +253,7 @@ func recreateCmd() *cobra.Command {
 		image        string
 		containerCfg string
 		envs         []string
+		dns          []string
 		cpuQuota     int64
 		cpuPeriod    int64
 		memoryLimit  int64
@@ -262,6 +272,7 @@ func recreateCmd() *cobra.Command {
 		Long:  "Recreates a container using original settings, with optional overrides from flags",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg.DNS = dns
 			cm := NewContainerManager(cfg)
 
 			opts := &RecreateOptions{
@@ -289,6 +300,7 @@ func recreateCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&image, "image", "i", "", "Override image (e.g., alpine:latest)")
 	cmd.Flags().StringVar(&containerCfg, "container-config", "", "Override container_config.json")
 	cmd.Flags().StringArrayVarP(&envs, "env", "e", []string{}, "Override environment variables (e.g., -e FOO=bar)")
+	cmd.Flags().StringArrayVar(&dns, "dns", []string{}, "DNS servers to use for image pulls (e.g., --dns 1.1.1.1 --dns 8.8.8.8)")
 	cmd.Flags().Int64Var(&cpuQuota, "cpu-quota", 0, "Override CPU quota in microseconds")
 	cmd.Flags().Int64Var(&cpuPeriod, "cpu-period", 0, "Override CPU period in microseconds")
 	cmd.Flags().Int64Var(&memoryLimit, "memory", 0, "Override memory limit in bytes")
@@ -298,7 +310,7 @@ func recreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&initProcess, "init", "", "Override init process")
 	cmd.Flags().BoolVar(&privileged, "privileged", false, "Override privileged mode")
 	cmd.Flags().StringVar(&netNamespace, "net", "host", "Override network namespace")
-	cmd.Flags().BoolVar(&tty, "tty", false, "Override TTY devices allocation")
+	cmd.Flags().BoolVarP(&tty, "tty", "t", false, "Override TTY devices allocation")
 
 	return cmd
 }
@@ -334,15 +346,21 @@ func execCmd() *cobra.Command {
 }
 
 func pullCmd() *cobra.Command {
-	return &cobra.Command{
+	var dns []string
+
+	cmd := &cobra.Command{
 		Use:   "pull [image]",
 		Short: "Pull an image from a registry",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg.DNS = dns
 			im := NewImageManager(cfg)
 			return im.Pull(args[0])
 		},
 	}
+
+	cmd.Flags().StringArrayVar(&dns, "dns", []string{}, "DNS servers to use for image pulls (e.g., --dns 1.1.1.1 --dns 8.8.8.8)")
+	return cmd
 }
 
 func runCmd() *cobra.Command {
@@ -355,6 +373,7 @@ func runCmd() *cobra.Command {
 		autoRemove   bool
 		volumes      []string
 		noOverlayFS  bool
+		dns          []string
 		cpuQuota     int64
 		cpuPeriod    int64
 		memoryLimit  int64
@@ -372,11 +391,8 @@ func runCmd() *cobra.Command {
 		Short: "Run a command in a new container (similar to docker run)",
 		Long:  "Creates and starts a container in one step. By default, it runs in the foreground. Use -d to detach.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg.DNS = dns
 			cm := NewContainerManager(cfg)
-
-			// The command to run inside the container can be passed after flags
-			// Example: dbox run -i ubuntu -- /bin/echo "hello"
-			// This part is an advanced feature, for now we'll use the image's default command.
 
 			opts := &RunOptions{
 				Image:           image,
@@ -385,6 +401,8 @@ func runCmd() *cobra.Command {
 				Envs:            envs,
 				Detach:          detach,
 				AutoRemove:      autoRemove,
+				Volumes:         volumes,
+				Command:         args,
 				NoOverlayFS:     noOverlayFS,
 				CPUQuota:        cpuQuota,
 				CPUPeriod:       cpuPeriod,
@@ -410,6 +428,7 @@ func runCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&autoRemove, "rm", false, "Automatically remove the container when it exits (only in foreground mode)")
 	cmd.Flags().StringArrayVarP(&volumes, "volume", "v", []string{}, "Bind mount a volume (e.g., /host/path:/container/path)")
 	cmd.Flags().BoolVar(&noOverlayFS, "no-overlayfs", false, "Disable OverlayFS and copy the rootfs (slower, but works on filesystems without overlay support)")
+	cmd.Flags().StringArrayVar(&dns, "dns", []string{}, "DNS servers to use for image pulls (e.g., --dns 1.1.1.1 --dns 8.8.8.8)")
 	cmd.Flags().Int64Var(&cpuQuota, "cpu-quota", 0, "CPU quota in microseconds (e.g., 50000 for 5% CPU)")
 	cmd.Flags().Int64Var(&cpuPeriod, "cpu-period", 0, "CPU period in microseconds (default 100000)")
 	cmd.Flags().Int64Var(&memoryLimit, "memory", 0, "Memory limit in bytes (e.g., 512m, 1g)")
@@ -419,7 +438,7 @@ func runCmd() *cobra.Command {
 	cmd.Flags().StringVar(&initProcess, "init", "", "Override init process (e.g., /sbin/init)")
 	cmd.Flags().BoolVar(&privileged, "privileged", false, "Run container in privileged mode")
 	cmd.Flags().StringVar(&netNamespace, "net", "host", "Network namespace (host, none, or container:name)")
-	cmd.Flags().BoolVar(&tty, "tty", false, "Allocate TTY devices (needed for some init systems)")
+	cmd.Flags().BoolVarP(&tty, "tty", "t", false, "Allocate a pseudo-TTY for interactive sessions")
 	cmd.MarkFlagRequired("image")
 
 	return cmd
@@ -584,6 +603,17 @@ func getEnvOrDefault(key, defaultVal string) string {
 	return defaultVal
 }
 
+func promptYesNo(question string) bool {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Printf("%s (y/N): ", question)
+	response, err := reader.ReadString('\n')
+	if err != nil {
+		return false
+	}
+	response = strings.ToLower(strings.TrimSpace(response))
+	return response == "y" || response == "yes"
+}
+
 func attachCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "attach [container-name]",
@@ -697,6 +727,98 @@ func scriptCmd() *cobra.Command {
 			return cm.RunScript(args[0], args[1])
 		},
 	}
+
+	return cmd
+}
+
+func completionCmd(rootCmd *cobra.Command) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "completion [bash|zsh|fish|powershell]",
+		Short: "Generate completion script",
+		Long: `To load completions:
+
+Bash:
+
+  $ source <(dbox completion bash)
+
+  # To load completions for each session, execute once:
+  # Linux:
+  $ dbox completion bash > /etc/bash_completion.d/dbox
+  # macOS:
+  $ dbox completion bash > /usr/local/etc/bash_completion.d/dbox
+
+Zsh:
+
+  # If shell completion is not already enabled in your environment,
+  # you will need to enable it.  You can execute the following once:
+
+  $ echo "autoload -U compinit; compinit" >> ~/.zshrc
+
+  # To load completions for each session, execute once:
+  $ dbox completion zsh > "${fpath[1]}/_dbox"
+
+  # You will need to start a new shell for this setup to take effect.
+
+fish:
+
+  $ dbox completion fish | source
+
+  # To load completions for each session, execute once:
+  $ dbox completion fish > ~/.config/fish/completions/dbox.fish
+
+PowerShell:
+
+  PS> dbox completion powershell | Out-String | Invoke-Expression
+
+  # To load completions for every new session, run:
+  PS> dbox completion powershell > dbox.ps1
+  # and source this file from your PowerShell profile.
+`,
+		DisableAutoGenTag: true,
+		ValidArgs:         []string{"bash", "zsh", "fish", "powershell"},
+		Args:              cobra.ExactValidArgs(1),
+	}
+
+	// Disable config loading for completion and its subcommands
+	cmd.PersistentPreRunE = nil
+
+	bashCmd := &cobra.Command{
+		Use:   "bash",
+		Short: "Generate the autocompletion script for bash",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return rootCmd.GenBashCompletion(cmd.OutOrStdout())
+		},
+	}
+	bashCmd.PersistentPreRunE = nil
+
+	zshCmd := &cobra.Command{
+		Use:   "zsh",
+		Short: "Generate the autocompletion script for zsh",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return rootCmd.GenZshCompletion(cmd.OutOrStdout())
+		},
+	}
+	zshCmd.PersistentPreRunE = nil
+
+	fishCmd := &cobra.Command{
+		Use:   "fish",
+		Short: "Generate the autocompletion script for fish",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return rootCmd.GenFishCompletion(cmd.OutOrStdout(), true)
+		},
+	}
+	fishCmd.PersistentPreRunE = nil
+
+	powershellCmd := &cobra.Command{
+		Use:   "powershell",
+		Short: "Generate the autocompletion script for powershell",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return rootCmd.GenPowerShellCompletionWithDesc(cmd.OutOrStdout())
+		},
+	}
+	powershellCmd.PersistentPreRunE = nil
+
+	cmd.AddCommand(bashCmd, zshCmd, fishCmd, powershellCmd)
 
 	return cmd
 }

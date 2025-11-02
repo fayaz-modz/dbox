@@ -56,6 +56,7 @@ type RunOptions struct {
 	Detach          bool
 	AutoRemove      bool
 	Volumes         []string
+	Command         []string
 	NoOverlayFS     bool
 	CPUQuota        int64
 	CPUPeriod       int64
@@ -342,6 +343,9 @@ func (cm *ContainerManager) generateOCISpecUsingRuntime(bundlePath, imagePath, n
 
 	if initProcess != "" {
 		ociSpec.Process.Args = []string{initProcess}
+	} else if runOpts != nil && len(runOpts.Command) > 0 {
+		// Use custom command
+		ociSpec.Process.Args = runOpts.Command
 	} else {
 		// Use image default command
 		processArgs := append(imgConfig.Config.Entrypoint, imgConfig.Config.Cmd...)
@@ -512,7 +516,7 @@ func (cm *ContainerManager) generateOCISpecUsingRuntime(bundlePath, imagePath, n
 
 	ociSpec.Hostname = name
 
-	ociSpec.Process.Terminal = (runOpts != nil)
+	ociSpec.Process.Terminal = (runOpts != nil && runOpts.TTY)
 
 	// Add TTY devices only if explicitly requested via --tty flag
 	var needsTTYDevices bool
@@ -884,14 +888,30 @@ func (cm *ContainerManager) Create(opts *CreateOptions) error {
 		os.RemoveAll(containerPath)
 		return fmt.Errorf("failed to generate OCI spec: %w", err)
 	}
+
+	// Store the creation options for later use by start/recreate
+	optionsPath := filepath.Join(containerPath, "options.json")
+	optionsData, err := json.MarshalIndent(opts, "", "  ")
+	if err != nil {
+		if !opts.NoOverlayFS {
+			cm.unmountOverlayFS(containerPath)
+		}
+		os.RemoveAll(containerPath)
+		return fmt.Errorf("failed to marshal options: %w", err)
+	}
+	if err := os.WriteFile(optionsPath, optionsData, 0644); err != nil {
+		if !opts.NoOverlayFS {
+			cm.unmountOverlayFS(containerPath)
+		}
+		os.RemoveAll(containerPath)
+		return fmt.Errorf("failed to write options file: %w", err)
+	}
+
 	metadata := map[string]string{"name": opts.Name, "image": opts.Image}
 	metadataPath := filepath.Join(containerPath, "metadata.json")
 	metadataData, _ := json.MarshalIndent(metadata, "", "  ")
 	os.WriteFile(metadataPath, metadataData, 0644)
-	logVerbose("Creating OCI container...")
-	if err := cm.runtime.Create(opts.Name, bundlePath); err != nil {
-		return fmt.Errorf("failed to create container: %w", err)
-	}
+
 	logInfo("Container '%s' created successfully!", opts.Name)
 	return nil
 }
@@ -962,6 +982,97 @@ func (cm *ContainerManager) List() error {
 	return nil
 }
 
+// createOptionsFromExisting attempts to recreate CreateOptions from existing container metadata and config
+func (cm *ContainerManager) createOptionsFromExisting(containerPath string, opts *CreateOptions) error {
+	// Read metadata
+	metadataPath := filepath.Join(containerPath, "metadata.json")
+	metadataData, err := os.ReadFile(metadataPath)
+	if err != nil {
+		return fmt.Errorf("failed to read metadata: %w", err)
+	}
+
+	var metadata map[string]string
+	if err := json.Unmarshal(metadataData, &metadata); err != nil {
+		return fmt.Errorf("failed to parse metadata: %w", err)
+	}
+
+	opts.Name = metadata["name"]
+	opts.Image = metadata["image"]
+
+	// Read config.json to extract some options
+	configPath := filepath.Join(containerPath, "config.json")
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to read config: %w", err)
+	}
+
+	var ociSpec spec.Spec
+	if err := json.Unmarshal(configData, &ociSpec); err != nil {
+		return fmt.Errorf("failed to parse config: %w", err)
+	}
+
+	// Try to detect privileged mode
+	if ociSpec.Process != nil && ociSpec.Process.Capabilities != nil {
+		privilegedCaps := []string{
+			"CAP_SYS_ADMIN", "CAP_NET_ADMIN", "CAP_SYS_PTRACE",
+			"CAP_SYS_MODULE", "CAP_DAC_READ_SEARCH", "CAP_SYS_RAWIO",
+			"CAP_SYS_TIME", "CAP_AUDIT_CONTROL", "CAP_MAC_ADMIN", "CAP_MAC_OVERRIDE",
+		}
+		for _, cap := range ociSpec.Process.Capabilities.Permitted {
+			if slices.Contains(privilegedCaps, cap) {
+				opts.Privileged = true
+				break
+			}
+		}
+	}
+
+	// Try to detect network namespace
+	if ociSpec.Linux != nil {
+		hasNetworkNS := false
+		for _, ns := range ociSpec.Linux.Namespaces {
+			if ns.Type == spec.NetworkNamespace {
+				hasNetworkNS = true
+				break
+			}
+		}
+		if !hasNetworkNS {
+			opts.NetNamespace = "host"
+		}
+	}
+
+	// Try to detect init process
+	if ociSpec.Process != nil && len(ociSpec.Process.Args) > 0 {
+		if ociSpec.Process.Args[0] != "/bin/sh" && ociSpec.Process.Args[0] != "/bin/bash" {
+			opts.InitProcess = ociSpec.Process.Args[0]
+		}
+	}
+
+	// Try to detect TTY
+	if ociSpec.Process != nil {
+		opts.TTY = ociSpec.Process.Terminal
+	}
+
+	// Detect OverlayFS vs copy
+	rootfsPath := filepath.Join(containerPath, "rootfs")
+	if _, err := os.Stat(rootfsPath); err == nil {
+		opts.NoOverlayFS = true
+	} else {
+		opts.NoOverlayFS = false
+	}
+
+	// Set defaults for other options
+	opts.CPUQuota = 0
+	opts.CPUPeriod = 0
+	opts.MemoryLimit = 0
+	opts.MemorySwap = 0
+	opts.CPUShares = 0
+	opts.BlkioWeight = 0
+	opts.Envs = []string{}
+	opts.ContainerConfig = ""
+
+	return nil
+}
+
 func (cm *ContainerManager) Start(name string, detach bool) error {
 	logDir := filepath.Join(cm.cfg.RunPath, "logs")
 	if err := os.MkdirAll(logDir, 0750); err != nil {
@@ -969,7 +1080,38 @@ func (cm *ContainerManager) Start(name string, detach bool) error {
 	}
 	logPath := filepath.Join(logDir, name+".log")
 
-	// Reset log file for fresh start
+	// Check if container is already running
+	if state, err := cm.runtime.State(name); err == nil && state == "running" {
+		fmt.Printf("Container '%s' is already running\n", name)
+		return nil
+	}
+
+	// Check if container exists in filesystem
+	containerPath := filepath.Join(cm.cfg.ContainersPath, name)
+	if _, err := os.Stat(containerPath); os.IsNotExist(err) {
+		return fmt.Errorf("container '%s' does not exist", name)
+	}
+
+	// Load stored options
+	optionsPath := filepath.Join(containerPath, "options.json")
+	optionsData, err := os.ReadFile(optionsPath)
+	var opts CreateOptions
+	if err != nil {
+		// Backward compatibility: if options.json doesn't exist, try to create it from metadata
+		if err := cm.createOptionsFromExisting(containerPath, &opts); err != nil {
+			return fmt.Errorf("failed to read container options and backward compatibility failed: %w", err)
+		}
+		// Save the created options for future use
+		if optionsData, err := json.MarshalIndent(&opts, "", "  "); err == nil {
+			os.WriteFile(optionsPath, optionsData, 0644)
+		}
+	} else {
+		if err := json.Unmarshal(optionsData, &opts); err != nil {
+			return fmt.Errorf("failed to parse container options: %w", err)
+		}
+	}
+
+	// Reset log file for fresh start (only when actually starting)
 	if err := os.WriteFile(logPath, []byte{}, 0644); err != nil {
 		return fmt.Errorf("failed to reset log file: %w", err)
 	}
@@ -986,14 +1128,19 @@ func (cm *ContainerManager) Start(name string, detach bool) error {
 		fmt.Printf("Starting container '%s' in foreground...\n", name)
 	}
 
-	err := cm.runtime.Start(name, logPath, detach)
+	// Clean up any existing runtime state (ignore errors)
+	logger.Log(fmt.Sprintf("Attempting to clean up any existing runtime state for '%s'", name))
+	cm.runtime.Delete(name, true) // Ignore error
+
+	// Use Run method which uses runc run
+	err = cm.runtime.Run(name, containerPath, detach, logPath)
 	if err != nil {
 		logger.Log(fmt.Sprintf("Failed to start container '%s': %v", name, err))
-	} else {
-		logger.Log(fmt.Sprintf("Successfully started container '%s'", name))
+		return err
 	}
 
-	return err
+	logger.Log(fmt.Sprintf("Successfully started container '%s'", name))
+	return nil
 }
 
 func (cm *ContainerManager) Stop(name string, force bool) error {
@@ -1041,13 +1188,10 @@ func (cm *ContainerManager) Recreate(name string) error {
 		return fmt.Errorf("container metadata does not contain image information")
 	}
 
-	// Stop the container if it's running
+	// Check if container is running - refuse to recreate if it is
 	state, err := cm.runtime.State(name)
 	if err == nil && (state == "running" || state == "creating" || state == "paused") {
-		logInfo("Stopping container '%s' before recreate...", name)
-		if err := cm.runtime.Stop(name, true); err != nil {
-			fmt.Printf("Warning: failed to stop container: %v\n", err)
-		}
+		return fmt.Errorf("container '%s' is currently %s. Please stop the container before recreating it", name, state)
 	}
 
 	// Read and cache original config.json BEFORE unmounting
@@ -1179,50 +1323,76 @@ func (cm *ContainerManager) RecreateWithOptions(opts *RecreateOptions) error {
 		return fmt.Errorf("container '%s' does not exist", opts.Name)
 	}
 
-	// Read metadata to get original image info (if not overridden)
-	imageName := opts.Image
-	if imageName == "" {
-		metadataPath := filepath.Join(containerPath, "metadata.json")
-		metadataData, err := os.ReadFile(metadataPath)
-		if err != nil {
-			return fmt.Errorf("failed to read container metadata: %w", err)
-		}
-
-		var metadata map[string]string
-		if err := json.Unmarshal(metadataData, &metadata); err != nil {
-			return fmt.Errorf("failed to parse container metadata: %w", err)
-		}
-
-		imageName = metadata["image"]
-		if imageName == "" {
-			return fmt.Errorf("container metadata does not contain image information")
-		}
+	// Read current options
+	optionsPath := filepath.Join(containerPath, "options.json")
+	optionsData, err := os.ReadFile(optionsPath)
+	if err != nil {
+		return fmt.Errorf("failed to read container options: %w", err)
 	}
 
-	// Stop the container if it's running
+	var currentOpts CreateOptions
+	if err := json.Unmarshal(optionsData, &currentOpts); err != nil {
+		return fmt.Errorf("failed to parse container options: %w", err)
+	}
+
+	// Merge overrides with current options
+	if opts.Image != "" {
+		currentOpts.Image = opts.Image
+	}
+	if opts.ContainerConfig != "" {
+		currentOpts.ContainerConfig = opts.ContainerConfig
+	}
+	if len(opts.Envs) > 0 {
+		currentOpts.Envs = opts.Envs
+	}
+	if opts.CPUQuota != 0 {
+		currentOpts.CPUQuota = opts.CPUQuota
+	}
+	if opts.CPUPeriod != 0 {
+		currentOpts.CPUPeriod = opts.CPUPeriod
+	}
+	if opts.MemoryLimit != 0 {
+		currentOpts.MemoryLimit = opts.MemoryLimit
+	}
+	if opts.MemorySwap != 0 {
+		currentOpts.MemorySwap = opts.MemorySwap
+	}
+	if opts.CPUShares != 0 {
+		currentOpts.CPUShares = opts.CPUShares
+	}
+	if opts.BlkioWeight != 0 {
+		currentOpts.BlkioWeight = opts.BlkioWeight
+	}
+	if opts.InitProcess != "" {
+		currentOpts.InitProcess = opts.InitProcess
+	}
+	if opts.Privileged {
+		currentOpts.Privileged = opts.Privileged
+	}
+	if opts.NetNamespace != "" {
+		currentOpts.NetNamespace = opts.NetNamespace
+	}
+	if opts.TTY {
+		currentOpts.TTY = opts.TTY
+	}
+
+	// Check if container is running - don't recreate if it is
 	state, err := cm.runtime.State(opts.Name)
 	if err == nil && (state == "running" || state == "creating" || state == "paused") {
-		fmt.Printf("Stopping container '%s'...\n", opts.Name)
-		if err := cm.runtime.Stop(opts.Name, true); err != nil {
-			fmt.Printf("Warning: failed to stop container: %v\n", err)
-		}
+		return fmt.Errorf("container '%s' is currently %s. Please stop the container before recreating it", opts.Name, state)
 	}
 
-	// Read and cache original config.json BEFORE unmounting
-	originalConfigPath := filepath.Join(containerPath, "config.json")
-	originalConfigData, err := os.ReadFile(originalConfigPath)
+	// Update image if changed
+	imageName := currentOpts.Image
+	rootfsSource, err := cm.imgMgr.GetRootfs(imageName)
 	if err != nil {
-		return fmt.Errorf("failed to read original config: %w", err)
-	}
-
-	var originalSpec spec.Spec
-	if err := json.Unmarshal(originalConfigData, &originalSpec); err != nil {
-		return fmt.Errorf("failed to parse original config: %w", err)
-	}
-
-	// Delete from runtime (but keep filesystem)
-	if err := cm.runtime.Delete(opts.Name, true); err != nil {
-		fmt.Printf("Warning: failed to delete from runtime: %v\n", err)
+		if err := cm.imgMgr.Pull(imageName); err != nil {
+			return fmt.Errorf("failed to pull new image: %w", err)
+		}
+		rootfsSource, err = cm.imgMgr.GetRootfs(imageName)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Unmount overlayfs if mounted
@@ -1233,12 +1403,6 @@ func (cm *ContainerManager) RecreateWithOptions(opts *RecreateOptions) error {
 		}
 	}
 
-	// Get rootfs source
-	rootfsSource, err := cm.imgMgr.GetRootfs(imageName)
-	if err != nil {
-		return fmt.Errorf("failed to get rootfs for image '%s': %w", imageName, err)
-	}
-
 	// Remount overlayfs
 	fmt.Println("Remounting OverlayFS...")
 	_, err = cm.mountOverlayFS(containerPath, rootfsSource)
@@ -1246,8 +1410,8 @@ func (cm *ContainerManager) RecreateWithOptions(opts *RecreateOptions) error {
 		return fmt.Errorf("failed to remount overlayfs: %w", err)
 	}
 
-	// Load container config (if any)
-	containerCfg, cfgErr := LoadContainerConfig(opts.ContainerConfig)
+	// Load container config
+	containerCfg, cfgErr := LoadContainerConfig(currentOpts.ContainerConfig)
 	if cfgErr != nil {
 		return fmt.Errorf("failed to load container config: %w", cfgErr)
 	}
@@ -1258,79 +1422,34 @@ func (cm *ContainerManager) RecreateWithOptions(opts *RecreateOptions) error {
 	rootPathForSpec := "merged"
 
 	// Remove existing config.json to allow regeneration
-	if _, err := os.Stat(originalConfigPath); err == nil {
+	configPath := filepath.Join(containerPath, "config.json")
+	if _, err := os.Stat(configPath); err == nil {
 		fmt.Printf("Removing existing config.json...\n")
-		if err := os.Remove(originalConfigPath); err != nil {
+		if err := os.Remove(configPath); err != nil {
 			return fmt.Errorf("failed to remove existing config.json: %w", err)
 		}
 	}
 
-	// Detect original OverlayFS setting by checking container structure
-	originalNoOverlayFS := false
-	rootfsPath := filepath.Join(containerPath, "rootfs")
-
-	if _, err = os.Stat(rootfsPath); err == nil {
-		originalNoOverlayFS = true
-	} else if _, err = os.Stat(mergedPath); err == nil {
-		originalNoOverlayFS = false
-	}
-
-	// Create options that merge original settings with overrides
-	createOpts := &CreateOptions{
-		Name:            opts.Name,
-		Image:           imageName,
-		ContainerConfig: opts.ContainerConfig,
-		Envs:            opts.Envs,
-		NoOverlayFS:     originalNoOverlayFS,
-		CPUQuota:        opts.CPUQuota,
-		CPUPeriod:       opts.CPUPeriod,
-		MemoryLimit:     opts.MemoryLimit,
-		MemorySwap:      opts.MemorySwap,
-		CPUShares:       opts.CPUShares,
-		BlkioWeight:     opts.BlkioWeight,
-		InitProcess:     opts.InitProcess,
-		Privileged:      opts.Privileged,
-		NetNamespace:    opts.NetNamespace,
-		TTY:             opts.TTY,
-	}
-
-	// If privileged is not explicitly set, try to preserve from original
-	if !opts.Privileged {
-		if originalSpec.Process != nil && originalSpec.Process.Capabilities != nil {
-			privilegedCaps := []string{"CAP_SYS_ADMIN", "CAP_NET_ADMIN", "CAP_SYS_MODULE",
-				"CAP_DAC_READ_SEARCH", "CAP_SYS_RAWIO", "CAP_SYS_TIME",
-				"CAP_AUDIT_CONTROL", "CAP_MAC_ADMIN", "CAP_MAC_OVERRIDE"}
-			hasPrivilegedCaps := false
-			for _, cap := range originalSpec.Process.Capabilities.Permitted {
-				if slices.Contains(privilegedCaps, cap) {
-					hasPrivilegedCaps = true
-				}
-				if hasPrivilegedCaps {
-					break
-				}
-			}
-			createOpts.Privileged = hasPrivilegedCaps
-		}
-	}
-
-	// If init process is not explicitly set, try to preserve from original
-	if opts.InitProcess == "" {
-		if originalSpec.Process != nil && len(originalSpec.Process.Args) > 0 {
-			if originalSpec.Process.Args[0] != "/bin/sh" && originalSpec.Process.Args[0] != "/bin/bash" {
-				createOpts.InitProcess = originalSpec.Process.Args[0]
-			}
-		}
-	}
-
 	fmt.Println("Regenerating OCI config...")
-	if err := cm.generateOCISpecUsingRuntime(bundlePath, imagePath, opts.Name, createOpts, nil, containerCfg, rootPathForSpec); err != nil {
+	if err := cm.generateOCISpecUsingRuntime(bundlePath, imagePath, opts.Name, &currentOpts, nil, containerCfg, rootPathForSpec); err != nil {
 		return fmt.Errorf("failed to regenerate OCI spec: %w", err)
 	}
 
-	// Recreate in runtime
-	fmt.Println("Recreating OCI container...")
-	if err := cm.runtime.Create(opts.Name, bundlePath); err != nil {
-		return fmt.Errorf("failed to recreate container: %w", err)
+	// Update stored options
+	newOptionsData, err := json.MarshalIndent(&currentOpts, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal updated options: %w", err)
+	}
+	if err := os.WriteFile(optionsPath, newOptionsData, 0644); err != nil {
+		return fmt.Errorf("failed to write updated options: %w", err)
+	}
+
+	// Update metadata if image changed
+	if imageName != "" {
+		metadata := map[string]string{"name": opts.Name, "image": imageName}
+		metadataPath := filepath.Join(containerPath, "metadata.json")
+		metadataData, _ := json.MarshalIndent(metadata, "", "  ")
+		os.WriteFile(metadataPath, metadataData, 0644)
 	}
 
 	fmt.Printf("Container '%s' recreated successfully!\n", opts.Name)

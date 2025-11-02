@@ -54,6 +54,7 @@ dbox recreate test --privileged  # Fix/modify container
 
 - [Quick Start](#quick-start)
 - [Installation](#installation)
+- [Group Setup](#group-setup)
 - [Configuration](#configuration)
 - [Key Behavioral Changes](#key-behavioral-changes)
 - [Usage](#usage)
@@ -70,11 +71,12 @@ dbox recreate test --privileged  # Fix/modify container
 ## Quick Start
 
 ```bash
-# Install dbox (see installation options below)
-# Pull an image
+# 1. Install dbox (see installation options below)
+# 2. Set up the dbox group for Docker-like experience (see Group Setup section)
+# 3. Pull an image
 dbox pull alpine:latest
 
-# Create a container
+# 4. Create a container
 dbox create -i alpine:latest -n my-container
 
 # Start the container
@@ -91,9 +93,10 @@ dbox run -i alpine:latest -n my-container
 
 ### Prerequisites
 
-- Go 1.21 or later
+- Go 1.23 or later
 - crun or runc installed
-- Root or appropriate permissions for container management
+- **For Docker-like experience without sudo: Set up the `dbox` group** (see Group Setup section below)
+- Root permissions only needed for initial group setup
 
 ### From Binary
 
@@ -109,34 +112,62 @@ go build -o dbox
 sudo mv dbox /usr/local/bin/
 ```
 
-### For Android
+**Important:** After installation, set up the dbox group for Docker-like permissions (see Group Setup section below).
 
-1. Download Android binary from releases
-2. Push to device:
-   ```bash
-   adb push dbox-android-arm64 /data/local/tmp/dbox
-   adb shell "chmod +x /data/local/tmp/dbox"
-   ```
+## Group Setup (Recommended - Docker-style)
 
-### For Termux
+**This is the primary recommended way to run dbox without sudo**, providing a Docker-like experience. Set up a `dbox` group:
 
 ```bash
-pkg update && pkg upgrade
-pkg install golang clang
-git clone https://github.com/yourusername/dbox
-cd dbox
-go build -o dbox
+# Create dbox group
+sudo groupadd dbox
+
+# Add users to the dbox group (replace 'username' with actual usernames)
+sudo usermod -aG dbox username
+sudo usermod -aG dbox anotheruser
+
+# Create system directories with proper permissions
+sudo mkdir -p /var/run/dbox
+sudo mkdir -p /var/lib/dbox/containers
+
+# Set group ownership and permissions
+sudo chgrp -R dbox /var/run/dbox
+sudo chgrp -R dbox /var/lib/dbox
+sudo chmod -R 775 /var/run/dbox
+sudo chmod -R 775 /var/lib/dbox
+
+# Optional: Set up user-specific directories
+sudo chgrp -R dbox /home/username/.local/share/dbox 2>/dev/null || true
+sudo chmod -R 775 /home/username/.local/share/dbox 2>/dev/null || true
+
+# For system-wide usage, update config to use /var/lib/dbox/containers
+sudo mkdir -p /etc/dbox
+sudo tee /etc/dbox/config.yaml > /dev/null <<EOF
+runtime: /usr/bin/crun
+runpath: /var/run/dbox
+containers_path: /var/lib/dbox/containers
+EOF
+
+# Log out and log back in for group changes to take effect
+# Or run: newgrp dbox
 ```
+
+After setup, users in the `dbox` group can run dbox commands without sudo.
 
 ## Configuration
 
 Create a config file at `/etc/dbox/config.yaml` or specify with `-c` flag or `DBOX_CONFIG` env var:
 
 ```yaml
-# /etc/dbox/config.yaml
+# /etc/dbox/config.yaml (system-wide, recommended for group setup)
 runtime: /usr/bin/crun  # or /usr/bin/runc
 runpath: /var/run/dbox
-containers_path: /home/user/.local/share/dbox/containers
+containers_path: /var/lib/dbox/containers
+
+# Alternative: User-specific configuration
+# runtime: /usr/bin/crun
+# runpath: ~/.dbox/run
+# containers_path: ~/.local/share/dbox/containers
 
 # Optional: Custom registries
 registries:
@@ -583,7 +614,7 @@ dbox exec minimal /custom-init.sh
 
 ### Prerequisites
 
-- Go 1.21 or later
+- Go 1.23 or later
 - crun or runc installed
 - For cross-compilation: appropriate C compilers
 
@@ -705,6 +736,7 @@ The `container_config.json` supports:
 
 - `-c, --config`: Path to config file (or set `DBOX_CONFIG` env)
 - `-h, --help`: Show help
+- `--verbose`: Enable verbose output with debug messages
 
 ### Available Commands
 
@@ -720,6 +752,7 @@ Optional:
   --container-config string  Path to container_config.json
 
   -e, --env strings         Set environment variables
+  --dns strings             DNS servers to use for image pulls
   --no-overlayfs           Disable OverlayFS and copy rootfs
   --init string            Override init process (e.g., /sbin/init)
   --privileged             Run container in privileged mode
@@ -745,6 +778,7 @@ Optional:
   --container-config string  Path to container_config.json
   -e, --env strings         Set environment variables
   -d, --detach             Run container in background
+  --dns strings            DNS servers to use for image pulls
   --rm                     Auto-remove container when it exits
   -v, --volume strings     Bind mount volumes
   --no-overlayfs           Disable OverlayFS and copy rootfs
@@ -819,6 +853,7 @@ dbox recreate [container-name] [flags]
   --container-config string     Override container_config.json
 
   -e, --env strings            Override environment variables
+  --dns strings                DNS servers to use for image pulls
   --init string                Override init process
   --privileged                 Override privileged mode
   --net string                 Override network namespace
@@ -841,7 +876,9 @@ Optional:
 
 #### **pull** - Pull an image from registry
 ```bash
-dbox pull [image]
+dbox pull [image] [flags]
+Optional:
+  --dns strings    DNS servers to use for image pulls
 ```
 
 #### **setup** - Run setup script in existing container
@@ -849,6 +886,11 @@ dbox pull [image]
 dbox setup [container-name] [flags]
 Required:
   -s, --script string    Path to setup script
+```
+
+#### **script** - Run a script in an existing container
+```bash
+dbox script [container-name] [script-path]
 ```
 
 #### **clean** - Clean image cache
@@ -865,6 +907,13 @@ dbox info
 ```bash
 dbox raw [runtime-args...]
 ```
+
+#### **completion** - Generate the autocompletion script for the specified shell
+```bash
+dbox completion [bash|zsh|fish|powershell]
+```
+
+**Note:** Completion works best when dbox is run as a regular user (see Group Setup). For sudo usage, see the "Shell Completion with sudo" section in Troubleshooting.
 
 ## Environment Variables
 
@@ -916,9 +965,27 @@ sudo rm -rf /var/run/dbox/logs/*
 
 ## Directory Structure
 
+**User-specific (default):**
 ```
 ~/.local/share/dbox/containers/
 ├── .images/              # Pulled images
+│   └── alpine_latest/
+│       ├── rootfs/
+│       └── config.json
+├── my-container/         # Container instance
+│   ├── bundle/
+│   │   ├── config.json
+│   │   └── rootfs/
+│   ├── upper/           # OverlayFS upper layer (if using overlay)
+│   ├── work/            # OverlayFS work directory
+│   ├── merged/          # OverlayFS mount point
+│   └── metadata.json
+```
+
+**System-wide (with group setup):**
+```
+/var/lib/dbox/containers/
+├── .images/              # Shared pulled images
 │   └── alpine_latest/
 │       ├── rootfs/
 │       └── config.json
@@ -936,10 +1003,120 @@ sudo rm -rf /var/run/dbox/logs/*
 
 ### Permission Denied
 
-Run with sudo or ensure your user has appropriate permissions:
+**Recommended: Set up the dbox group** (see Group Setup section above for Docker-style permissions - this is the primary way to run dbox without sudo).
 
+**Alternative: Run with sudo**
 ```bash
 sudo dbox create -i alpine -n test
+```
+
+**Note:** If using sudo, shell completion may not work properly. See the section below for a workaround.
+
+### Directory Permission Issues
+
+dbox creates configuration and container directories automatically. If you encounter permission errors:
+
+**Primary solution: Docker-style group setup** (see Group Setup section above - this is the recommended approach).
+
+**Temporary workaround: Run with sudo**
+```bash
+sudo dbox create -i alpine -n test
+```
+
+**Alternative: Create directories manually with proper permissions**
+```bash
+# Create the default directories
+sudo mkdir -p /var/run/dbox
+sudo mkdir -p ~/.local/share/dbox/containers
+
+# Set ownership to your user (replace 'username' with your actual username)
+sudo chown -R username:username /var/run/dbox
+sudo chown -R username:username ~/.local/share/dbox
+```
+
+**Last resort: Use custom config location**
+```bash
+# Create a config file in a location you own
+mkdir -p ~/dbox-config
+cat > ~/dbox-config/config.yaml << EOF
+runtime: /usr/bin/crun
+runpath: ~/dbox-config/run
+containers_path: ~/dbox-config/containers
+EOF
+
+# Use the custom config
+dbox -c ~/dbox-config/config.yaml create -i alpine -n test
+```
+
+**Option 4: Docker-style group setup (recommended)**
+```bash
+# Create dbox group
+sudo groupadd dbox
+
+# Add your user to the dbox group (replace 'username' with your actual username)
+sudo usermod -aG dbox username
+
+# Create the default directories with group ownership
+sudo mkdir -p /var/run/dbox
+sudo mkdir -p /var/lib/dbox/containers  # Alternative system-wide location
+
+# Set group ownership and permissions
+sudo chgrp -R dbox /var/run/dbox
+sudo chgrp -R dbox /var/lib/dbox
+sudo chmod -R 775 /var/run/dbox
+sudo chmod -R 775 /var/lib/dbox
+
+# For user-specific containers, set group ownership on user directories
+sudo chgrp -R dbox ~/.local/share/dbox 2>/dev/null || true
+sudo chmod -R 775 ~/.local/share/dbox 2>/dev/null || true
+
+# If using systemd, you may need to configure the service
+# Create /etc/systemd/system/dbox.service with appropriate group settings
+
+# Log out and log back in for group changes to take effect
+# Or run: newgrp dbox
+```
+
+After setting up the group, users in the `dbox` group can run dbox commands without sudo. You may need to update your config to use `/var/lib/dbox/containers` for system-wide container storage if preferred.
+
+### Shell Completion with sudo
+
+If you must use sudo but still want shell completion, you have two options:
+
+**Option 1: Generate completion as regular user and install system-wide**
+```bash
+# Generate completion script as your regular user
+dbox completion bash > ~/dbox-completion.bash
+
+# Install system-wide (requires sudo)
+sudo cp ~/dbox-completion.bash /etc/bash_completion.d/dbox
+sudo chmod 644 /etc/bash_completion.d/dbox
+
+# Or for manual sourcing
+echo "source ~/dbox-completion.bash" >> ~/.bashrc
+```
+
+**Option 2: Use sudo with completion preserved**
+```bash
+# For bash, add this to your ~/.bashrc
+complete -F _dbox dbox
+
+# Generate the completion function
+dbox completion bash | grep -A 100 "_dbox()" >> ~/.bashrc
+```
+
+**Option 3: Create a sudo wrapper script**
+```bash
+# Create a wrapper script
+cat > ~/bin/dbox-sudo <<'EOF'
+#!/bin/bash
+exec sudo /usr/local/bin/dbox "$@"
+EOF
+chmod +x ~/bin/dbox-sudo
+
+# Add to PATH and set up completion
+export PATH="$HOME/bin:$PATH"
+complete -F _dbox dbox-sudo
 ```
 
 ### Container Won't Start

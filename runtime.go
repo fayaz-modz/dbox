@@ -152,19 +152,15 @@ func (r *Runtime) Start(containerID, logPath string, detach bool) error {
 }
 
 func (r *Runtime) Stop(containerID string, force bool) error {
-	logVerbose("Stopping container '%s' (force=%v)", containerID, force)
 	// Check container state first
 	state, err := r.State(containerID)
 	if err != nil {
 		// If container doesn't exist in runtime, it's already stopped
 		if strings.Contains(err.Error(), "does not exist") {
-			logVerbose("Container '%s' not found in runtime, already stopped", containerID)
 			return nil
 		}
 		return fmt.Errorf("failed to get container state: %w", err)
 	}
-
-	logVerbose("Stopping container '%s' in state '%s'", containerID, state)
 
 	// If container is already stopped, nothing to do
 	if state == "stopped" {
