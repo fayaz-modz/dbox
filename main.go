@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -535,19 +537,8 @@ func logsCmd() *cobra.Command {
 					os.Remove(pidFile)
 				}
 
-				// Start tail process
-				logCmd := exec.Command("tail", "-f", logPath)
-				logCmd.Stdout = os.Stdout
-				logCmd.Stderr = os.Stderr
-
-				// Start the process
-				if err := logCmd.Start(); err != nil {
-					return fmt.Errorf("failed to start tail process: %w", err)
-				}
-
 				// Write PID file
-				if err := os.WriteFile(pidFile, []byte(strconv.Itoa(logCmd.Process.Pid)), 0644); err != nil {
-					logCmd.Process.Kill()
+				if err := os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0644); err != nil {
 					return fmt.Errorf("failed to write PID file: %w", err)
 				}
 
@@ -555,23 +546,33 @@ func logsCmd() *cobra.Command {
 				sigChan := make(chan os.Signal, 1)
 				signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
-				// Wait for process to finish or signal
-				done := make(chan error, 1)
-				go func() {
-					done <- logCmd.Wait()
-				}()
+				// Open log file
+				file, err := os.Open(logPath)
+				if err != nil {
+					os.Remove(pidFile)
+					return fmt.Errorf("failed to open log file: %w", err)
+				}
+				defer file.Close()
+				defer os.Remove(pidFile)
 
-				select {
-				case err := <-done:
-					// Process finished normally
-					os.Remove(pidFile)
-					return err
-				case sig := <-sigChan:
-					// Received signal, cleanup
-					logCmd.Process.Signal(sig)
-					logCmd.Wait()
-					os.Remove(pidFile)
-					return nil
+				// Read and follow the log file
+				reader := bufio.NewReader(file)
+				for {
+					line, err := reader.ReadString('\n')
+					if err == nil {
+						fmt.Print(line)
+					} else if err == io.EOF {
+						// Check for signal
+						select {
+						case <-sigChan:
+							return nil
+						default:
+							time.Sleep(100 * time.Millisecond)
+							continue
+						}
+					} else {
+						return err
+					}
 				}
 			} else {
 				// Non-follow mode, just cat the file
