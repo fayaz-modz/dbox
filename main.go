@@ -695,28 +695,45 @@ func statusCmd() *cobra.Command {
 			name := args[0]
 			rt := NewRuntime(cfg)
 
-			// Get runtime state
-			state, err := rt.State(name)
-			if err != nil {
-				// Check if it exists in filesystem
-				containerPath := filepath.Join(cfg.ContainersPath, name)
-				if _, statErr := os.Stat(containerPath); statErr == nil {
-					fmt.Printf("Container: %s\n", name)
-					fmt.Printf("Status: STOPPED\n")
-					return nil
+			// First check metadata for stored status (like List command does)
+			metadataPath := filepath.Join(cfg.ContainersPath, name, "metadata.json")
+			var status string
+			if data, err := os.ReadFile(metadataPath); err == nil {
+				var metadata map[string]string
+				if json.Unmarshal(data, &metadata) == nil {
+					status = metadata["status"]
+				}
+			}
+
+			// If no status in metadata, determine from runtime state
+			if status == "" {
+				state, err := rt.State(name)
+				if err != nil {
+					// Check if container directory exists but runtime doesn't know about it
+					containerPath := filepath.Join(cfg.ContainersPath, name)
+					if _, statErr := os.Stat(containerPath); statErr == nil {
+						status = StatusStopped
+					} else {
+						fmt.Printf("Container: %s\n", name)
+						fmt.Printf("Status: NOT FOUND\n")
+						fmt.Printf("Error: %v\n", err)
+						return nil
+					}
 				} else {
-					fmt.Printf("Container: %s\n", name)
-					fmt.Printf("Status: NOT FOUND\n")
-					fmt.Printf("Error: %v\n", err)
-					return nil
+					status = strings.ToUpper(state)
+				}
+			} else {
+				// If we have metadata status, also check runtime for more accurate running state
+				runtimeState, err := rt.State(name)
+				if err == nil {
+					status = strings.ToUpper(runtimeState)
 				}
 			}
 
 			fmt.Printf("Container: %s\n", name)
-			fmt.Printf("Status: %s\n", strings.ToUpper(state))
+			fmt.Printf("Status: %s\n", status)
 
 			// Get metadata
-			metadataPath := filepath.Join(cfg.ContainersPath, name, "metadata.json")
 			if data, err := os.ReadFile(metadataPath); err == nil {
 				var metadata map[string]any
 				if json.Unmarshal(data, &metadata) == nil {
@@ -742,7 +759,7 @@ func statusCmd() *cobra.Command {
 				fmt.Println("Log contains: Container output, Runtime logs, and Dbox operations")
 			}
 
-			if state == "running" {
+			if status == "RUNNING" {
 				fmt.Println("\nTo attach: dbox attach", name)
 				fmt.Println("To view logs: dbox logs", name)
 				fmt.Println("To view init logs: dbox exec", name, "cat /var/log/dbox-init.log")
