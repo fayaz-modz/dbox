@@ -51,6 +51,7 @@ dbox recreate test --privileged  # Fix/modify container
 - 🔧 Raw runtime access for advanced debugging
 - 🔄 Enhanced container status tracking (CREATING → READY → RUNNING → STOPPED)
 - 📈 Real-time download progress with percentage indicators in logs
+- 🛑 Container creation can be stopped during creation process (both foreground and background modes)
 
 ## Table of Contents
 
@@ -234,8 +235,11 @@ dbox status my-alpine
 dbox exec my-alpine /bin/sh
 dbox exec my-alpine apk add vim
 
-# Stop a container
+# Stop a container (works even during creation)
 dbox stop my-alpine
+
+# Stop container creation in progress
+dbox stop creating-container  # Works for both foreground and background creation
 
 # Recreate a container (fixes stopped containers, preserves data)
 dbox recreate my-alpine
@@ -344,12 +348,13 @@ dbox list
 - **RUNNING**: Container is currently running
 - **STOPPED**: Container is stopped but intact
 - **UNKNOWN**: Container state cannot be determined (possibly corrupted)
+- **CREATION_STOPPED**: Container creation was interrupted and stopped
 
 **Status Transitions:**
 ```
 CREATING → READY → RUNNING → STOPPED
-    ↓         ↓        ↓
-  UNKNOWN   UNKNOWN   UNKNOWN
+    ↓         ↓        ↓        ↓
+  UNKNOWN   UNKNOWN   UNKNOWN   CREATION_STOPPED
 ```
 
 ### Custom Init Process
@@ -500,6 +505,56 @@ dbox recreate my-container \
 6. Preserves container data and filesystem changes
 
 **Note:** The `recreate` command automatically preserves the original OverlayFS setting to prevent conflicts between overlay and non-overlay filesystem types.
+
+### Container Creation Stopping
+
+dbox allows you to stop container creation during the creation process, regardless of whether you used the `-d` (detach) flag or not:
+
+```bash
+# Start container creation in foreground
+dbox create -i alpine -n test-container
+
+# In another terminal, stop the creation
+dbox stop test-container
+
+# Works for both foreground and background creation
+dbox create -i ubuntu -n bg-container -d
+dbox stop bg-container  # Stops background creation
+```
+
+**How Creation Stopping Works:**
+- **Process Management**: Container creation runs in a separate process group for both foreground and background modes
+- **PID Tracking**: The creation process ID is stored for termination
+- **Clean Cleanup**: Automatically removes partial container files and updates status
+- **Status Update**: Container status is set to `CREATION_STOPPED` for clarity
+
+**Use Cases:**
+- **Long Downloads**: Stop large image pulls that are taking too long
+- **Mistakes**: Cancel accidental container creation
+- **Resource Management**: Stop creation when system resources are needed
+- **Testing**: Interrupt creation for testing purposes
+
+**What Gets Cleaned Up:**
+- Partial container filesystem
+- Creation process PID files
+- Container metadata (status updated to `CREATION_STOPPED`)
+- Log files (preserved for debugging)
+
+**Example Scenario:**
+```bash
+# Terminal 1: Start a large container creation
+dbox create -i large-image:latest -n big-container
+# Output: Creating container 'big-container' from image 'large-image:latest'...
+# Output: Found 15 layers to extract...
+
+# Terminal 2: Stop the creation
+dbox stop big-container
+# Output: Container 'big-container' creation stopped
+
+# Check status
+dbox list
+# Output: big-container    large-image    CREATION_STOPPED    2025-11-04
+```
 
 ### Container Resource Usage Monitoring
 
@@ -758,6 +813,7 @@ Built binaries are placed in the `bin/` directory:
 | Progress Tracking | ✓ | ✗ | Limited | Limited |
 | Status States | ✓ | ✗ | ✓ | ✓ |
 | Container Recreate | ✓ | ✗ | ✗ | ✗ |
+| Creation Stopping | ✓ | ✗ | ✗ | ✗ |
 | Raw Runtime Access | ✓ | ✗ | Limited | Limited |
 
 ## Container Config Reference
@@ -866,11 +922,15 @@ Optional:
   -d, --detach           Run in background (default is foreground)
 ```
 
-#### **stop** - Stop a running container
+#### **stop** - Stop a running container or container creation
 ```bash
 dbox stop [container-name] [flags]
 Optional:
-  -f, --force           Force stop the container
+  -f, --force           Force stop: container
+
+# Can stop containers during creation process (both foreground and background modes)
+# Works for containers in CREATING, RUNNING, or READY states
+# Automatically cleans up partial creation files and updates status
 ```
 
 #### **list** - List all containers
@@ -1440,8 +1500,9 @@ dbox is currently in **beta**. It's functional for basic container operations bu
 - [x] Container recreate functionality with overrides
 - [x] Container resource usage monitoring
 - [x] Comprehensive logging system with real-time progress tracking
-- [x] Enhanced container status tracking (CREATING → READY → RUNNING → STOPPED → UNKNOWN)
+- [x] Enhanced container status tracking (CREATING → READY → RUNNING → STOPPED → UNKNOWN → CREATION_STOPPED)
 - [x] Real-time download progress with percentage indicators
+- [x] Container creation stopping (works for both foreground and background modes)
 - [x] Raw runtime access
 - [x] Container attach functionality
 - [x] Setup script execution

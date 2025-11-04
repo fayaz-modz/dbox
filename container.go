@@ -127,6 +127,90 @@ func (cm *ContainerManager) updateContainerStatus(containerName, status string) 
 	return os.WriteFile(metadataPath, data, 0644)
 }
 
+func (cm *ContainerManager) getContainerStatus(containerName string) (string, error) {
+	metadataPath := filepath.Join(cm.cfg.ContainersPath, containerName, "metadata.json")
+
+	// Read metadata
+	data, err := os.ReadFile(metadataPath)
+	if err != nil {
+		return "", err
+	}
+
+	var metadata map[string]string
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return "", err
+	}
+
+	status, exists := metadata["status"]
+	if !exists {
+		return "", fmt.Errorf("status not found in metadata")
+	}
+
+	return status, nil
+}
+
+func (cm *ContainerManager) stopContainerCreation(name string, logger *DboxLogger) error {
+	// Try to stop the creation process
+	pidFile := filepath.Join(cm.cfg.RunPath, "logs", "."+name+".create.pid")
+	processStopped := false
+
+	if pidData, err := os.ReadFile(pidFile); err == nil {
+		if pid, err := strconv.Atoi(string(pidData)); err == nil {
+			logger.Log(fmt.Sprintf("Found creation process PID %d, attempting to terminate process group", pid))
+
+			// Try to terminate the process group (negative PID kills the entire group)
+			if process, err := os.FindProcess(-pid); err == nil {
+				// Send SIGTERM to the process group
+				if err := process.Signal(syscall.SIGTERM); err != nil {
+					logger.Log(fmt.Sprintf("Failed to send SIGTERM to process group %d: %v", -pid, err))
+				} else {
+					logger.Log(fmt.Sprintf("Sent SIGTERM to process group %d", -pid))
+					processStopped = true
+
+					// Wait a bit and check if process is still running
+					time.Sleep(2 * time.Second)
+
+					// Check if process still exists by sending signal 0
+					if err := process.Signal(syscall.Signal(0)); err == nil {
+						// Process still running, force kill the entire group
+						logger.Log(fmt.Sprintf("Process group %d still running, sending SIGKILL", -pid))
+						if err := process.Signal(syscall.SIGKILL); err != nil {
+							logger.Log(fmt.Sprintf("Failed to send SIGKILL to process group %d: %v", -pid, err))
+						} else {
+							logger.Log(fmt.Sprintf("Sent SIGKILL to process group %d", -pid))
+						}
+					}
+				}
+			}
+		}
+
+		// Clean up PID file
+		os.Remove(pidFile)
+	}
+
+	if !processStopped {
+		logger.Log("No creation process found")
+	}
+
+	// Clean up partial container creation
+	containerPath := filepath.Join(cm.cfg.ContainersPath, name)
+	if _, err := os.Stat(containerPath); err == nil {
+		logger.Log(fmt.Sprintf("Cleaning up partial container creation at %s", containerPath))
+		if err := os.RemoveAll(containerPath); err != nil {
+			logger.Log(fmt.Sprintf("Failed to clean up partial container: %v", err))
+		} else {
+			logger.Log(fmt.Sprintf("Successfully cleaned up partial container"))
+		}
+	}
+
+	// Update status to indicate creation was stopped
+	cm.updateContainerStatus(name, "CREATION_STOPPED")
+	logger.Log(fmt.Sprintf("Container '%s' creation stopped", name))
+	fmt.Printf("Container '%s' creation stopped\n", name)
+
+	return nil
+}
+
 // mergeContainerConfigs merges container configurations with proper priority:
 // default config < container config file < CLI flags
 func (cm *ContainerManager) mergeContainerConfigs(containerCfg *ContainerConfig, opts *CreateOptions, runOpts *RunOptions) *ContainerConfig {
@@ -963,6 +1047,12 @@ func (cm *ContainerManager) Create(opts *CreateOptions, detach bool) error {
 	}
 	logPath := filepath.Join(logDir, opts.Name+".log")
 
+	// Create logger for both detached and foreground modes
+	logger := NewDboxLogger(logPath)
+	defer logger.Close()
+
+	logger.Log(fmt.Sprintf("Creating container '%s' from image '%s'", opts.Name, opts.Image))
+
 	if detach {
 		fmt.Printf("Creating container '%s' in background...\n", opts.Name)
 		fmt.Printf("Logs will be available at: %s\n", logPath)
@@ -1018,9 +1108,9 @@ func (cm *ContainerManager) Create(opts *CreateOptions, detach bool) error {
 
 		cmd := exec.Command(os.Args[0], args...)
 
-		// Set up process group and detach from terminal
+		// Set up process group for both foreground and background modes
 		cmd.SysProcAttr = &syscall.SysProcAttr{
-			Setsid: true,
+			Setpgid: true,
 		}
 
 		// Redirect all output to /dev/null for the background process
@@ -1033,19 +1123,101 @@ func (cm *ContainerManager) Create(opts *CreateOptions, detach bool) error {
 			return fmt.Errorf("failed to start background creation process: %w", err)
 		}
 
+		// Store the background process PID for potential termination during creation
+		pidFile := filepath.Join(cm.cfg.RunPath, "logs", "."+opts.Name+".create.pid")
+		if err := os.WriteFile(pidFile, []byte(strconv.Itoa(cmd.Process.Pid)), 0644); err != nil {
+			logger.Log(fmt.Sprintf("Warning: failed to write creation PID file: %v", err))
+		}
+
 		// Return immediately, leaving the process running in background
 		return nil
 	}
 
-	// Foreground mode - continue with normal creation
-	logger := NewDboxLogger(logPath)
-	defer logger.Close()
-
-	logger.Log(fmt.Sprintf("Creating container '%s' from image '%s'", opts.Name, opts.Image))
+	// Foreground mode - run in background but wait for completion
 	logInfo("Creating container '%s' from image '%s'...", opts.Name, opts.Image)
 	logVerbose("Container path: %s", filepath.Join(cm.cfg.ContainersPath, opts.Name))
 
-	return cm.createContainer(opts, logger)
+	// Create a background process for creation (same as detached mode)
+	args := []string{
+		"create-background",
+		"--name", opts.Name,
+		"--image", opts.Image,
+		"--log-path", logPath,
+	}
+
+	// Add optional flags
+	if opts.ContainerConfig != "" {
+		args = append(args, "--container-config", opts.ContainerConfig)
+	}
+	if opts.NoOverlayFS {
+		args = append(args, "--no-overlayfs")
+	}
+	if opts.InitProcess != "" {
+		args = append(args, "--init", opts.InitProcess)
+	}
+	if opts.Privileged {
+		args = append(args, "--privileged")
+	}
+	if opts.NetNamespace != "" {
+		args = append(args, "--net", opts.NetNamespace)
+	}
+	if opts.TTY {
+		args = append(args, "--tty")
+	}
+	for _, env := range opts.Envs {
+		args = append(args, "--env", env)
+	}
+	if opts.CPUQuota != 0 {
+		args = append(args, "--cpu-quota", fmt.Sprintf("%d", opts.CPUQuota))
+	}
+	if opts.CPUPeriod != 0 {
+		args = append(args, "--cpu-period", fmt.Sprintf("%d", opts.CPUPeriod))
+	}
+	if opts.MemoryLimit != 0 {
+		args = append(args, "--memory", fmt.Sprintf("%d", opts.MemoryLimit))
+	}
+	if opts.MemorySwap != 0 {
+		args = append(args, "--memory-swap", fmt.Sprintf("%d", opts.MemorySwap))
+	}
+	if opts.CPUShares != 0 {
+		args = append(args, "--cpu-shares", fmt.Sprintf("%d", opts.CPUShares))
+	}
+	if opts.BlkioWeight != 0 {
+		args = append(args, "--blkio-weight", fmt.Sprintf("%d", opts.BlkioWeight))
+	}
+
+	cmd := exec.Command(os.Args[0], args...)
+
+	// Set up process group
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setpgid: true,
+	}
+
+	// Connect stdout and stderr to show output in foreground mode
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	// Start the background process
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start creation process: %w", err)
+	}
+
+	// Store the background process PID for potential termination
+	pidFile := filepath.Join(cm.cfg.RunPath, "logs", "."+opts.Name+".create.pid")
+	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(cmd.Process.Pid)), 0644); err != nil {
+		logger.Log(fmt.Sprintf("Warning: failed to write creation PID file: %v", err))
+	}
+
+	// Wait for completion and show output (foreground behavior)
+	if err := cmd.Wait(); err != nil {
+		// Clean up PID file on error
+		os.Remove(pidFile)
+		return err
+	}
+
+	// Clean up PID file on success
+	os.Remove(pidFile)
+	return nil
 }
 
 func (cm *ContainerManager) createContainer(opts *CreateOptions, logger *DboxLogger) error {
@@ -1432,6 +1604,14 @@ func (cm *ContainerManager) Stop(name string, force bool) error {
 	logger := NewDboxLogger(logPath)
 	defer logger.Close()
 
+	// Check container status to handle different scenarios
+	status, err := cm.getContainerStatus(name)
+	if err == nil && status == StatusCreating {
+		// Container is still being created - stop the creation process
+		logger.Log(fmt.Sprintf("Container '%s' is being created, stopping creation process", name))
+		return cm.stopContainerCreation(name, logger)
+	}
+
 	// Check if container is already stopped
 	if state, err := cm.runtime.State(name); err == nil && state == "stopped" && !force {
 		fmt.Printf("Container '%s' is already stopped\n", name)
@@ -1439,7 +1619,7 @@ func (cm *ContainerManager) Stop(name string, force bool) error {
 	}
 
 	logger.Log(fmt.Sprintf("Stopping container '%s' (force=%v)", name, force))
-	err := cm.runtime.Stop(name, force)
+	err = cm.runtime.Stop(name, force)
 	if err != nil {
 		logger.Log(fmt.Sprintf("Failed to stop container '%s': %v", name, err))
 		logDebug("Failed to stop container '%s': %v", name, err)

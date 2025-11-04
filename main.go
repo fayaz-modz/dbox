@@ -942,6 +942,10 @@ func createBackgroundCmd() *cobra.Command {
 			logger := NewDboxLogger(logPath)
 			defer logger.Close()
 
+			// Clean up creation PID file when done
+			pidFile := filepath.Join(cfg.RunPath, "logs", "."+name+".create.pid")
+			defer os.Remove(pidFile)
+
 			logger.Log(fmt.Sprintf("Creating container '%s' from image '%s'", name, image))
 
 			if err := cm.createContainer(opts, logger); err != nil {
