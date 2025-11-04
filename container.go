@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/v1"
@@ -196,6 +197,20 @@ func (cm *ContainerManager) Run(opts *RunOptions) error {
 		return fmt.Errorf("failed to create container directory: %w", err)
 	}
 
+	// Create log directory and file early for potential image pulling
+	logDir := filepath.Join(cm.cfg.RunPath, "logs")
+	if err := os.MkdirAll(logDir, 0750); err != nil {
+		return fmt.Errorf("failed to create log directory: %w", err)
+	}
+	logPath := filepath.Join(logDir, opts.Name+".log")
+
+	var logger *DboxLogger
+	if opts.Detach {
+		logger = NewDboxLogger(logPath)
+		defer logger.Close()
+		logger.Log(fmt.Sprintf("Running container '%s' from image '%s'", opts.Name, opts.Image))
+	}
+
 	// Track cleanup state
 	overlayMounted := false
 	containerCreated := true
@@ -220,9 +235,71 @@ func (cm *ContainerManager) Run(opts *RunOptions) error {
 
 	rootfsSource, err := cm.imgMgr.GetRootfs(opts.Image)
 	if err != nil {
-		if err := cm.imgMgr.Pull(opts.Image); err != nil {
+		var logFile *os.File
+		if logger != nil {
+			logFile = logger.logFile
+		}
+		if err := cm.imgMgr.Pull(opts.Image, logFile); err != nil {
+			if logger != nil {
+				logger.Log(fmt.Sprintf("Failed to pull image: %v", err))
+			}
 			cleanup()
 			return fmt.Errorf("failed to pull image: %w", err)
+		}
+		if logger != nil {
+			logger.Log("Image pulled successfully")
+		}
+		rootfsSource, err = cm.imgMgr.GetRootfs(opts.Image)
+		if err != nil {
+			cleanup()
+			return err
+		}
+	}
+	logPath = filepath.Join(logDir, opts.Name+".log")
+
+	if opts.Detach {
+		logger = NewDboxLogger(logPath)
+		defer logger.Close()
+		logger.Log(fmt.Sprintf("Running container '%s' from image '%s'", opts.Name, opts.Image))
+	}
+
+	// Track cleanup state
+	overlayMounted = false
+	containerCreated = true
+
+	// Cleanup function for failures
+	cleanup = func() {
+		if overlayMounted && !opts.NoOverlayFS {
+			cm.unmountOverlayFS(containerPath)
+		}
+		if containerCreated {
+			os.RemoveAll(containerPath)
+		}
+	}
+
+	// Defer cleanup - will only run if we return with error
+	defer func() {
+		if r := recover(); r != nil {
+			cleanup()
+			panic(r) // Re-panic after cleanup
+		}
+	}()
+
+	rootfsSource, err = cm.imgMgr.GetRootfs(opts.Image)
+	if err != nil {
+		var logFile *os.File
+		if logger != nil {
+			logFile = logger.logFile
+		}
+		if err := cm.imgMgr.Pull(opts.Image, logFile); err != nil {
+			if logger != nil {
+				logger.Log(fmt.Sprintf("Failed to pull image: %v", err))
+			}
+			cleanup()
+			return fmt.Errorf("failed to pull image: %w", err)
+		}
+		if logger != nil {
+			logger.Log("Image pulled successfully")
 		}
 		rootfsSource, err = cm.imgMgr.GetRootfs(opts.Image)
 		if err != nil {
@@ -287,18 +364,7 @@ func (cm *ContainerManager) Run(opts *RunOptions) error {
 		return fmt.Errorf("failed to generate OCI spec: %w", err)
 	}
 
-	var logPath string
-	var logger *DboxLogger
 	if opts.Detach {
-		logDir := filepath.Join(cm.cfg.RunPath, "logs")
-		if err := os.MkdirAll(logDir, 0750); err != nil {
-			cleanup()
-			return fmt.Errorf("failed to create log directory: %w", err)
-		}
-		logPath = filepath.Join(logDir, opts.Name+".log")
-		logger = NewDboxLogger(logPath)
-		defer logger.Close()
-
 		logger.Log(fmt.Sprintf("Running container '%s' from image '%s'", opts.Name, opts.Image))
 	}
 
@@ -858,10 +924,100 @@ func getTTYMinor(tty string) int64 {
 	return 0
 }
 
-func (cm *ContainerManager) Create(opts *CreateOptions) error {
+func (cm *ContainerManager) Create(opts *CreateOptions, detach bool) error {
+	// Create log directory and file
+	logDir := filepath.Join(cm.cfg.RunPath, "logs")
+	if err := os.MkdirAll(logDir, 0750); err != nil {
+		return fmt.Errorf("failed to create log directory: %w", err)
+	}
+	logPath := filepath.Join(logDir, opts.Name+".log")
+
+	if detach {
+		fmt.Printf("Creating container '%s' in background...\n", opts.Name)
+		fmt.Printf("Logs will be available at: %s\n", logPath)
+
+		// Create a background process using exec.Command
+		args := []string{
+			"create-background",
+			"--name", opts.Name,
+			"--image", opts.Image,
+			"--log-path", logPath,
+		}
+
+		// Add optional flags
+		if opts.ContainerConfig != "" {
+			args = append(args, "--container-config", opts.ContainerConfig)
+		}
+		if opts.NoOverlayFS {
+			args = append(args, "--no-overlayfs")
+		}
+		if opts.InitProcess != "" {
+			args = append(args, "--init", opts.InitProcess)
+		}
+		if opts.Privileged {
+			args = append(args, "--privileged")
+		}
+		if opts.NetNamespace != "" {
+			args = append(args, "--net", opts.NetNamespace)
+		}
+		if opts.TTY {
+			args = append(args, "--tty")
+		}
+		for _, env := range opts.Envs {
+			args = append(args, "--env", env)
+		}
+		if opts.CPUQuota != 0 {
+			args = append(args, "--cpu-quota", fmt.Sprintf("%d", opts.CPUQuota))
+		}
+		if opts.CPUPeriod != 0 {
+			args = append(args, "--cpu-period", fmt.Sprintf("%d", opts.CPUPeriod))
+		}
+		if opts.MemoryLimit != 0 {
+			args = append(args, "--memory", fmt.Sprintf("%d", opts.MemoryLimit))
+		}
+		if opts.MemorySwap != 0 {
+			args = append(args, "--memory-swap", fmt.Sprintf("%d", opts.MemorySwap))
+		}
+		if opts.CPUShares != 0 {
+			args = append(args, "--cpu-shares", fmt.Sprintf("%d", opts.CPUShares))
+		}
+		if opts.BlkioWeight != 0 {
+			args = append(args, "--blkio-weight", fmt.Sprintf("%d", opts.BlkioWeight))
+		}
+
+		cmd := exec.Command(os.Args[0], args...)
+
+		// Set up process group and detach from terminal
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			Setsid: true,
+		}
+
+		// Redirect all output to /dev/null for the background process
+		cmd.Stdin = nil
+		cmd.Stdout = nil
+		cmd.Stderr = nil
+
+		// Start the background process
+		if err := cmd.Start(); err != nil {
+			return fmt.Errorf("failed to start background creation process: %w", err)
+		}
+
+		// Return immediately, leaving the process running in background
+		return nil
+	}
+
+	// Foreground mode - continue with normal creation
+	logger := NewDboxLogger(logPath)
+	defer logger.Close()
+
+	logger.Log(fmt.Sprintf("Creating container '%s' from image '%s'", opts.Name, opts.Image))
 	logInfo("Creating container '%s' from image '%s'...", opts.Name, opts.Image)
 	logVerbose("Container path: %s", filepath.Join(cm.cfg.ContainersPath, opts.Name))
 
+	return cm.createContainer(opts, logger)
+}
+
+func (cm *ContainerManager) createContainer(opts *CreateOptions, logger *DboxLogger) error {
 	containerPath := filepath.Join(cm.cfg.ContainersPath, opts.Name)
 	if _, err := os.Stat(containerPath); !os.IsNotExist(err) {
 		return fmt.Errorf("container '%s' already exists", opts.Name)
@@ -896,10 +1052,13 @@ func (cm *ContainerManager) Create(opts *CreateOptions) error {
 	rootfsSource, err := cm.imgMgr.GetRootfs(opts.Image)
 	if err != nil {
 		logVerbose("Image not found locally, pulling automatically...")
-		if err := cm.imgMgr.Pull(opts.Image); err != nil {
+		logger.Log("Image not found locally, pulling automatically...")
+		if err := cm.imgMgr.Pull(opts.Image, logger.logFile); err != nil {
+			logger.Log(fmt.Sprintf("Failed to pull image: %v", err))
 			cleanup()
 			return fmt.Errorf("failed to pull image: %w", err)
 		}
+		logger.Log("Image pulled successfully")
 		rootfsSource, err = cm.imgMgr.GetRootfs(opts.Image)
 		if err != nil {
 			cleanup()
@@ -907,6 +1066,7 @@ func (cm *ContainerManager) Create(opts *CreateOptions) error {
 		}
 	} else {
 		logVerbose("Using cached image...")
+		logger.Log("Using cached image")
 	}
 	imagePath := filepath.Dir(rootfsSource)
 	bundlePath := containerPath
@@ -965,7 +1125,11 @@ func (cm *ContainerManager) Create(opts *CreateOptions) error {
 	containerCreated = false
 	overlayMounted = false
 
-	logInfo("Container '%s' created successfully!", opts.Name)
+	if logger != nil {
+		logger.Log(fmt.Sprintf("Successfully created container '%s'", opts.Name))
+	} else {
+		logInfo("Container '%s' created successfully!", opts.Name)
+	}
 	return nil
 }
 
@@ -1463,9 +1627,21 @@ func (cm *ContainerManager) RecreateWithOptions(opts *RecreateOptions) error {
 	imageName := currentOpts.Image
 	rootfsSource, err := cm.imgMgr.GetRootfs(imageName)
 	if err != nil {
-		if err := cm.imgMgr.Pull(imageName); err != nil {
+		// Create log file for pulling progress
+		logDir := filepath.Join(cm.cfg.RunPath, "logs")
+		if err := os.MkdirAll(logDir, 0750); err != nil {
+			return fmt.Errorf("failed to create log directory: %w", err)
+		}
+		logPath := filepath.Join(logDir, opts.Name+".log")
+		logger := NewDboxLogger(logPath)
+		defer logger.Close()
+
+		logger.Log(fmt.Sprintf("Pulling new image '%s' for container '%s'", imageName, opts.Name))
+		if err := cm.imgMgr.Pull(imageName, logger.logFile); err != nil {
+			logger.Log(fmt.Sprintf("Failed to pull new image: %v", err))
 			return fmt.Errorf("failed to pull new image: %w", err)
 		}
+		logger.Log("New image pulled successfully")
 		rootfsSource, err = cm.imgMgr.GetRootfs(imageName)
 		if err != nil {
 			return err

@@ -107,6 +107,7 @@ func main() {
 	// Commands
 	rootCmd.AddCommand(
 		createCmd(),
+		createBackgroundCmd(),
 		listCmd(),
 		startCmd(),
 		statusCmd(),
@@ -139,6 +140,7 @@ func createCmd() *cobra.Command {
 		containerCfg string
 		envs         []string
 		noOverlayFS  bool
+		detach       bool
 		dns          []string
 		cpuQuota     int64
 		cpuPeriod    int64
@@ -177,7 +179,7 @@ func createCmd() *cobra.Command {
 				TTY:             tty,
 			}
 
-			return cm.Create(opts)
+			return cm.Create(opts, detach)
 		},
 	}
 
@@ -197,6 +199,7 @@ func createCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&privileged, "privileged", false, "Run container in privileged mode")
 	cmd.Flags().StringVar(&netNamespace, "net", "host", "Network namespace (host, none, or container:name)")
 	cmd.Flags().BoolVarP(&tty, "tty", "t", false, "Allocate a pseudo-TTY for interactive sessions")
+	cmd.Flags().BoolVarP(&detach, "detach", "d", false, "Run container creation in background and log to file")
 
 	cmd.RegisterFlagCompletionFunc("image", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		var config *Config
@@ -385,7 +388,7 @@ func pullCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg.DNS = dns
 			im := NewImageManager(cfg)
-			return im.Pull(args[0])
+			return im.Pull(args[0], nil)
 		},
 	}
 
@@ -885,6 +888,94 @@ fish:
 	fishCmd.PersistentPreRunE = nil
 
 	cmd.AddCommand(bashCmd, zshCmd, fishCmd)
+
+	return cmd
+}
+
+func createBackgroundCmd() *cobra.Command {
+	var (
+		name         string
+		image        string
+		logPath      string
+		containerCfg string
+		envs         []string
+		noOverlayFS  bool
+		dns          []string
+		cpuQuota     int64
+		cpuPeriod    int64
+		memoryLimit  int64
+		memorySwap   int64
+		cpuShares    int64
+		blkioWeight  uint16
+		initProcess  string
+		privileged   bool
+		netNamespace string
+		tty          bool
+	)
+
+	cmd := &cobra.Command{
+		Use:    "create-background [flags]",
+		Short:  "Internal command for background container creation",
+		Hidden: true, // Hide from help
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cm := NewContainerManager(cfg)
+
+			opts := &CreateOptions{
+				Image:           image,
+				Name:            name,
+				ContainerConfig: containerCfg,
+				Envs:            envs,
+				NoOverlayFS:     noOverlayFS,
+				CPUQuota:        cpuQuota,
+				CPUPeriod:       cpuPeriod,
+				MemoryLimit:     memoryLimit,
+				MemorySwap:      memorySwap,
+				CPUShares:       cpuShares,
+				BlkioWeight:     blkioWeight,
+				InitProcess:     initProcess,
+				Privileged:      privileged,
+				NetNamespace:    netNamespace,
+				TTY:             tty,
+			}
+
+			// Create logger and run the actual creation
+			logger := NewDboxLogger(logPath)
+			defer logger.Close()
+
+			logger.Log(fmt.Sprintf("Creating container '%s' from image '%s'", name, image))
+
+			if err := cm.createContainer(opts, logger); err != nil {
+				logger.Log(fmt.Sprintf("Failed to create container '%s': %v", name, err))
+				return err
+			}
+
+			logger.Log(fmt.Sprintf("Successfully created container '%s'", name))
+			return nil
+		},
+	}
+
+	// Flags (matching createCmd)
+	cmd.Flags().StringVarP(&image, "image", "i", "", "Image to use (e.g., alpine:latest)")
+	cmd.Flags().StringVarP(&name, "name", "n", "", "Container name")
+	cmd.Flags().StringVar(&containerCfg, "container-config", "", "Path to container_config.json")
+	cmd.Flags().StringArrayVarP(&envs, "env", "e", []string{}, "Set environment variables (e.g., -e FOO=bar)")
+	cmd.Flags().BoolVar(&noOverlayFS, "no-overlayfs", false, "Disable OverlayFS and copy the rootfs (slower, but works on filesystems without overlay support)")
+	cmd.Flags().StringArrayVar(&dns, "dns", []string{}, "DNS servers to use for image pulls (e.g., --dns 1.1.1.1 --dns 8.8.8.8)")
+	cmd.Flags().Int64Var(&cpuQuota, "cpu-quota", 0, "CPU quota in microseconds (e.g., 50000 for 5% CPU)")
+	cmd.Flags().Int64Var(&cpuPeriod, "cpu-period", 0, "CPU period in microseconds (default 100000)")
+	cmd.Flags().Int64Var(&memoryLimit, "memory", 0, "Memory limit in bytes (e.g., 512m, 1g)")
+	cmd.Flags().Int64Var(&memorySwap, "memory-swap", 0, "Memory+swap limit in bytes")
+	cmd.Flags().Int64Var(&cpuShares, "cpu-shares", 0, "CPU shares (relative weight, 1024 default)")
+	cmd.Flags().Uint16Var(&blkioWeight, "blkio-weight", 0, "Block IO weight (10-1000)")
+	cmd.Flags().StringVar(&initProcess, "init", "", "Override init process (e.g., /sbin/init)")
+	cmd.Flags().BoolVar(&privileged, "privileged", false, "Run container in privileged mode")
+	cmd.Flags().StringVar(&netNamespace, "net", "host", "Network namespace (host, none, or container:name)")
+	cmd.Flags().BoolVarP(&tty, "tty", "t", false, "Allocate a pseudo-TTY for interactive sessions")
+	cmd.Flags().StringVar(&logPath, "log-path", "", "Path to log file")
+
+	cmd.MarkFlagRequired("image")
+	cmd.MarkFlagRequired("name")
+	cmd.MarkFlagRequired("log-path")
 
 	return cmd
 }

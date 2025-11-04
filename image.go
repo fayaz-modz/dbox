@@ -32,6 +32,7 @@ type progressReader struct {
 	current int64
 	total   int64
 	prefix  string
+	logFile *os.File
 }
 
 // Read overrides the underlying Read method to update and print progress.
@@ -58,8 +59,7 @@ func (pr *progressReader) printProgress() {
 
 	bar := strings.Repeat("█", completedWidth) + strings.Repeat("░", barWidth-completedWidth)
 
-	// Use carriage return `\r` to stay on the same line.
-	fmt.Printf("\r%s [%s] %.1f%% (%s / %s)",
+	progressMsg := fmt.Sprintf("%s [%s] %.1f%% (%s / %s)",
 		pr.prefix,
 		bar,
 		percentage,
@@ -67,9 +67,18 @@ func (pr *progressReader) printProgress() {
 		formatBytes(uint64(pr.total)),
 	)
 
-	// When download is complete, print a newline to move to the next line.
-	if pr.current >= pr.total {
-		fmt.Println()
+	if pr.logFile != nil {
+		// Write to log file (without carriage return)
+		pr.logFile.WriteString(progressMsg + "\n")
+		pr.logFile.Sync()
+	} else {
+		// Use carriage return `\r` to stay on the same line for console output.
+		fmt.Printf("\r%s", progressMsg)
+
+		// When download is complete, print a newline to move to the next line.
+		if pr.current >= pr.total {
+			fmt.Println()
+		}
 	}
 }
 
@@ -93,6 +102,7 @@ func NewImageManager(cfg *Config) *ImageManager {
 
 type progressTransport struct {
 	underlying http.RoundTripper
+	logFile    *os.File
 }
 
 // RoundTrip is the core of the transport. It intercepts the request, gets the response,
@@ -122,14 +132,20 @@ func (pt *progressTransport) RoundTrip(req *http.Request) (*http.Response, error
 			ReadCloser: resp.Body,
 			total:      resp.ContentLength,
 			prefix:     prefix,
+			logFile:    pt.logFile,
 		}
 	}
 
 	return resp, nil
 }
 
-func (im *ImageManager) Pull(imageRef string) error {
-	logInfo("Pulling image: %s", imageRef)
+func (im *ImageManager) Pull(imageRef string, logFile *os.File) error {
+	if logFile != nil {
+		fmt.Fprintf(logFile, "Pulling image: %s\n", imageRef)
+		logFile.Sync()
+	} else {
+		logInfo("Pulling image: %s", imageRef)
+	}
 	logVerbose("Resolving image reference...")
 	imageRef = im.resolveImageRef(imageRef)
 	logVerbose("Resolved to: %s", imageRef)
@@ -169,6 +185,7 @@ func (im *ImageManager) Pull(imageRef string) error {
 
 	customTransport := &progressTransport{
 		underlying: transport,
+		logFile:    logFile,
 	}
 
 	OS := runtime.GOOS
@@ -205,7 +222,12 @@ func (im *ImageManager) Pull(imageRef string) error {
 		return fmt.Errorf("failed to export image: %w", err)
 	}
 
-	logInfo("Successfully pulled: %s", imageRef)
+	if logFile != nil {
+		fmt.Fprintf(logFile, "Successfully pulled: %s\n", imageRef)
+		logFile.Sync()
+	} else {
+		logInfo("Successfully pulled: %s", imageRef)
+	}
 	return nil
 }
 
