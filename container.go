@@ -1401,7 +1401,6 @@ func (cm *ContainerManager) List() error {
 				var metadata map[string]string
 				if json.Unmarshal(data, &metadata) == nil {
 					imageName = metadata["image"]
-					status = metadata["status"]
 					if imageName == "" {
 						imageName = "unknown"
 					}
@@ -1412,18 +1411,17 @@ func (cm *ContainerManager) List() error {
 				imageName = "unknown"
 			}
 
-			// If no status in metadata, determine from runtime state
-			if status == "" {
-				if state, err := cm.runtime.State(containerName); err == nil {
-					status = strings.ToUpper(state)
+			// Always check runtime state for accurate status
+			runtimeState, err := cm.runtime.State(containerName)
+			if err != nil {
+				// Check if container directory exists but runtime doesn't know about it
+				if _, err := os.Stat(filepath.Join(cm.cfg.ContainersPath, containerName)); err == nil {
+					status = StatusStopped
 				} else {
-					// Check if container directory exists but runtime doesn't know about it
-					if _, err := os.Stat(filepath.Join(cm.cfg.ContainersPath, containerName)); err == nil {
-						status = StatusStopped
-					} else {
-						status = StatusUnknown
-					}
+					status = StatusUnknown
 				}
+			} else {
+				status = strings.ToUpper(runtimeState)
 			}
 
 			fmt.Printf("%-20s %-15s %-10s %s\n", containerName, imageName, status, createdTime)

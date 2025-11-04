@@ -269,6 +269,10 @@ func (r *Runtime) State(containerID string) (string, error) {
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		// Check if crun exited with code 1, which means container is not running (stopped)
+		if exitError, ok := err.(*exec.ExitError); ok && exitError.ExitCode() == 1 {
+			return "stopped", nil
+		}
 		// Include the command's output in the error for better debugging
 		return "", fmt.Errorf("runtime state command failed for '%s': %s: %w", containerID, strings.TrimSpace(string(output)), err)
 	}

@@ -705,29 +705,21 @@ func statusCmd() *cobra.Command {
 				}
 			}
 
-			// If no status in metadata, determine from runtime state
-			if status == "" {
-				state, err := rt.State(name)
-				if err != nil {
-					// Check if container directory exists but runtime doesn't know about it
-					containerPath := filepath.Join(cfg.ContainersPath, name)
-					if _, statErr := os.Stat(containerPath); statErr == nil {
-						status = StatusStopped
-					} else {
-						fmt.Printf("Container: %s\n", name)
-						fmt.Printf("Status: NOT FOUND\n")
-						fmt.Printf("Error: %v\n", err)
-						return nil
-					}
+			// Always check runtime state for accurate status
+			runtimeState, err := rt.State(name)
+			if err != nil {
+				// Check if container directory exists but runtime doesn't know about it
+				containerPath := filepath.Join(cfg.ContainersPath, name)
+				if _, statErr := os.Stat(containerPath); statErr == nil {
+					status = StatusStopped
 				} else {
-					status = strings.ToUpper(state)
+					fmt.Printf("Container: %s\n", name)
+					fmt.Printf("Status: NOT FOUND\n")
+					fmt.Printf("Error: %v\n", err)
+					return nil
 				}
 			} else {
-				// If we have metadata status, also check runtime for more accurate running state
-				runtimeState, err := rt.State(name)
-				if err == nil {
-					status = strings.ToUpper(runtimeState)
-				}
+				status = strings.ToUpper(runtimeState)
 			}
 
 			fmt.Printf("Container: %s\n", name)
