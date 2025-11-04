@@ -47,8 +47,10 @@ dbox recreate test --privileged  # Fix/modify container
 - 🖥️ TTY device allocation for init systems (`--tty` flag)
 - ⚙️ Enhanced recreate command with full override support
 - 📊 Container resource usage monitoring with CPU percentage, memory, PID, and cgroups info
-- 📝 Comprehensive logging with unified log files
+- 📝 Comprehensive logging with unified log files and real-time progress tracking
 - 🔧 Raw runtime access for advanced debugging
+- 🔄 Enhanced container status tracking (CREATING → READY → RUNNING → STOPPED)
+- 📈 Real-time download progress with percentage indicators in logs
 
 ## Table of Contents
 
@@ -193,11 +195,14 @@ registries:
 - **Attach support**: `attach` command provides interactive shell access to running containers
 - **Status command**: Shows comprehensive container information including log location
 - **Raw access**: `raw` command allows direct runtime access for debugging
+- **Improved status tracking**: Container list shows accurate states (CREATING, READY, RUNNING, STOPPED, UNKNOWN)
+- **Progress visibility**: Download and extraction progress shown by default without `--verbose` flag
 
 #### Filesystem Management
 - **OverlayFS default**: Uses OverlayFS for efficient storage (disable with `--no-overlayfs`)
 - **Automatic cleanup**: Proper unmounting and cleanup on container deletion
-- **Progress indicators**: Shows progress for image pulls and filesystem operations
+- **Progress indicators**: Shows progress for image pulls and filesystem operations with real-time percentage tracking
+- **Enhanced logging**: Download progress and extraction status visible by default in logs
 
 ## Usage
 
@@ -207,7 +212,7 @@ registries:
 # Show configuration and runtime info
 dbox info
 
-# Pull an image
+# Pull an image (shows real-time progress)
 dbox pull alpine:latest
 dbox pull ubuntu:22.04
 dbox pull archlinux
@@ -215,7 +220,7 @@ dbox pull archlinux
 # Create a container
 dbox create -i alpine:latest -n my-alpine
 
-# List containers
+# List containers (shows enhanced status: CREATING, READY, RUNNING, STOPPED, UNKNOWN)
 dbox list
 dbox ls
 
@@ -288,6 +293,64 @@ dbox recreate my-container --net host              # Change network
 ```
 
 ## Advanced Features
+
+### Enhanced Progress Tracking
+
+dbox provides real-time progress tracking for all operations without requiring verbose flags:
+
+```bash
+# Image pulls show download and extraction progress
+dbox pull alpine:latest
+# Output:
+# Image not found locally, pulling automatically...
+# Found 1 layers to extract
+# Extracting 1 layers...
+# Extracting layer 1/1...
+#   Downloading data... [██████████████████████████████] 100.0% (3.6 MB / 3.6 MB)
+
+# Container creation shows filesystem setup progress
+dbox create -i alpine -n test
+# Output:
+# Setting up OverlayFS mount...
+# Successfully created container 'test'
+```
+
+**Progress Features:**
+- **Real-time download bars** with percentage and file size
+- **Layer extraction tracking** showing current layer progress
+- **Filesystem operation status** for OverlayFS setup
+- **Always visible** - no `--verbose` flag required
+- **Logged by default** - progress appears in container logs
+
+### Container Status Tracking
+
+dbox tracks containers through their complete lifecycle with detailed status states:
+
+```bash
+dbox list
+# Output:
+# CONTAINER_NAME       IMAGE           STATUS     CREATED
+# -------------------- --------------- ---------- -------------------
+# my-container         alpine          READY      2025-11-04
+# running-container     ubuntu          RUNNING    2025-11-04
+# stopped-container     fedora          STOPPED    2025-11-04
+# creating-container   arch            CREATING   2025-11-04
+# corrupted-container  debian          UNKNOWN    2025-11-04
+```
+
+**Status States:**
+- **CREATING**: Container is being created and filesystem is being set up
+- **READY**: Container created successfully, ready to be started
+- **RUNNING**: Container is currently running
+- **STOPPED**: Container is stopped but intact
+- **UNKNOWN**: Container state cannot be determined (possibly corrupted)
+
+**Status Transitions:**
+```
+CREATING → READY → RUNNING → STOPPED
+    ↓         ↓        ↓
+  UNKNOWN   UNKNOWN   UNKNOWN
+```
 
 ### Custom Init Process
 
@@ -692,6 +755,8 @@ Built binaries are placed in the `bin/` directory:
 | Resource Limits | ✓ | Limited | ✓ | ✓ |
 | Usage Monitoring | ✓ | ✗ | ✓ | ✓ |
 | Unified Logging | ✓ | ✗ | ✓ | ✓ |
+| Progress Tracking | ✓ | ✗ | Limited | Limited |
+| Status States | ✓ | ✗ | ✓ | ✓ |
 | Container Recreate | ✓ | ✗ | ✗ | ✗ |
 | Raw Runtime Access | ✓ | ✗ | Limited | Limited |
 
@@ -812,6 +877,7 @@ Optional:
 ```bash
 dbox list
 # Alias: dbox ls
+# Shows enhanced status: CREATING, READY, RUNNING, STOPPED, UNKNOWN
 ```
 
 #### **exec** - Execute commands in a container
@@ -879,6 +945,7 @@ Optional:
 dbox pull [image] [flags]
 Optional:
   --dns strings    DNS servers to use for image pulls
+# Shows real-time download progress and extraction status by default
 ```
 
 #### **setup** - Run setup script in existing container
@@ -948,8 +1015,16 @@ dbox status my-container
 
 ### Log Format
 ```
-[2025-01-30T10:15:30Z] DBOX: Starting container 'my-container'
-[2025-01-30T10:15:31Z] DBOX: Successfully started container 'my-container'
+[2025-01-30T10:15:30Z] DBOX: Creating container 'my-container' from image 'alpine'
+[2025-01-30T10:15:30Z] DBOX: Image not found locally, pulling automatically...
+Found 1 layers to extract
+Extracting 1 layers...
+Extracting layer 1/1...
+  Downloading data... [██████████████████████████████] 100.0% (3.6 MB / 3.6 MB)
+[2025-01-30T10:15:31Z] DBOX: Setting up OverlayFS mount...
+[2025-01-30T10:15:31Z] DBOX: Successfully created container 'my-container'
+[2025-01-30T10:15:32Z] DBOX: Starting container 'my-container'
+[2025-01-30T10:15:33Z] DBOX: Successfully started container 'my-container'
 Container output appears here...
 ```
 
@@ -1364,7 +1439,9 @@ dbox is currently in **beta**. It's functional for basic container operations bu
 - [x] Container mutability options (OverlayFS vs full copy)
 - [x] Container recreate functionality with overrides
 - [x] Container resource usage monitoring
-- [x] Comprehensive logging system
+- [x] Comprehensive logging system with real-time progress tracking
+- [x] Enhanced container status tracking (CREATING → READY → RUNNING → STOPPED → UNKNOWN)
+- [x] Real-time download progress with percentage indicators
 - [x] Raw runtime access
 - [x] Container attach functionality
 - [x] Setup script execution

@@ -67,18 +67,18 @@ func (pr *progressReader) printProgress() {
 		formatBytes(uint64(pr.total)),
 	)
 
+	// Always show progress on stdout with carriage return
+	fmt.Printf("\r%s", progressMsg)
+
+	// When download is complete, print a newline to move to the next line.
+	if pr.current >= pr.total {
+		fmt.Println()
+	}
+
+	// Also write progress to log file (with newline for log readability)
 	if pr.logFile != nil {
-		// Write to log file (without carriage return)
 		pr.logFile.WriteString(progressMsg + "\n")
 		pr.logFile.Sync()
-	} else {
-		// Use carriage return `\r` to stay on the same line for console output.
-		fmt.Printf("\r%s", progressMsg)
-
-		// When download is complete, print a newline to move to the next line.
-		if pr.current >= pr.total {
-			fmt.Println()
-		}
 	}
 }
 
@@ -272,7 +272,7 @@ func (im *ImageManager) exportImage(img v1.Image, destPath string) error {
 		return fmt.Errorf("failed to get image layers: %w", err)
 	}
 
-	logVerbose("Found %d layers to extract", len(layers))
+	logInfo("Found %d layers to extract", len(layers))
 
 	// Create rootfs directory
 	rootfsPath := filepath.Join(destPath, "rootfs")
@@ -281,9 +281,9 @@ func (im *ImageManager) exportImage(img v1.Image, destPath string) error {
 	}
 
 	// Extract each layer
-	logVerbose("Extracting %d layers...", len(layers))
+	logInfo("Extracting %d layers...", len(layers))
 	for i, layer := range layers {
-		logVerbose("Extracting layer %d/%d...", i+1, len(layers))
+		logInfo("Extracting layer %d/%d...", i+1, len(layers))
 		if err := im.extractLayer(layer, rootfsPath); err != nil {
 			return fmt.Errorf("failed to extract layer %d: %w", i, err)
 		}

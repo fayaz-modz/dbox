@@ -27,6 +27,14 @@ type ContainerManager struct {
 	imgMgr  *ImageManager
 }
 
+const (
+	StatusCreating = "CREATING"
+	StatusReady    = "READY"
+	StatusRunning  = "RUNNING"
+	StatusStopped  = "STOPPED"
+	StatusUnknown  = "UNKNOWN"
+)
+
 func (cm *ContainerManager) Attach(name string) error {
 	return cm.runtime.Exec(name, []string{"/bin/sh"})
 }
@@ -94,6 +102,29 @@ func NewContainerManager(cfg *Config) *ContainerManager {
 		runtime: NewRuntime(cfg),
 		imgMgr:  NewImageManager(cfg),
 	}
+}
+
+func (cm *ContainerManager) updateContainerStatus(containerName, status string) error {
+	metadataPath := filepath.Join(cm.cfg.ContainersPath, containerName, "metadata.json")
+
+	// Read existing metadata
+	var metadata map[string]string
+	if data, err := os.ReadFile(metadataPath); err == nil {
+		json.Unmarshal(data, &metadata)
+	} else {
+		metadata = make(map[string]string)
+	}
+
+	// Update status
+	metadata["status"] = status
+
+	// Write back metadata
+	data, err := json.MarshalIndent(metadata, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(metadataPath, data, 0644)
 }
 
 // mergeContainerConfigs merges container configurations with proper priority:
@@ -1026,6 +1057,16 @@ func (cm *ContainerManager) createContainer(opts *CreateOptions, logger *DboxLog
 		return fmt.Errorf("failed to create container directory: %w", err)
 	}
 
+	// Initialize container metadata with CREATING status
+	metadata := map[string]string{
+		"image":  opts.Image,
+		"status": StatusCreating,
+	}
+	metadataPath := filepath.Join(containerPath, "metadata.json")
+	if data, err := json.MarshalIndent(metadata, "", "  "); err == nil {
+		os.WriteFile(metadataPath, data, 0644)
+	}
+
 	// Track cleanup state
 	overlayMounted := false
 	containerCreated := true
@@ -1084,7 +1125,7 @@ func (cm *ContainerManager) createContainer(opts *CreateOptions, logger *DboxLog
 		}
 		rootPathForSpec = "rootfs"
 	} else {
-		logVerbose("Setting up OverlayFS mount...")
+		logger.Log("Setting up OverlayFS mount...")
 		_, err := cm.mountOverlayFS(containerPath, rootfsSource)
 		if err != nil {
 			cleanup()
@@ -1116,10 +1157,8 @@ func (cm *ContainerManager) createContainer(opts *CreateOptions, logger *DboxLog
 		return fmt.Errorf("failed to write options file: %w", err)
 	}
 
-	metadata := map[string]string{"name": opts.Name, "image": opts.Image}
-	metadataPath := filepath.Join(containerPath, "metadata.json")
-	metadataData, _ := json.MarshalIndent(metadata, "", "  ")
-	os.WriteFile(metadataPath, metadataData, 0644)
+	// Update status to READY after successful creation
+	cm.updateContainerStatus(opts.Name, StatusReady)
 
 	// Success - don't run cleanup
 	containerCreated = false
@@ -1185,11 +1224,12 @@ func (cm *ContainerManager) List() error {
 			}
 
 			// Get metadata
-			var imageName string
+			var imageName, status string
 			if data, err := os.ReadFile(metadataPath); err == nil {
 				var metadata map[string]string
 				if json.Unmarshal(data, &metadata) == nil {
 					imageName = metadata["image"]
+					status = metadata["status"]
 					if imageName == "" {
 						imageName = "unknown"
 					}
@@ -1200,14 +1240,17 @@ func (cm *ContainerManager) List() error {
 				imageName = "unknown"
 			}
 
-			// Get container status
-			status := "unknown"
-			if state, err := cm.runtime.State(containerName); err == nil {
-				status = strings.ToUpper(state)
-			} else {
-				// Check if container directory exists but runtime doesn't know about it
-				if _, err := os.Stat(filepath.Join(cm.cfg.ContainersPath, containerName)); err == nil {
-					status = "STOPPED"
+			// If no status in metadata, determine from runtime state
+			if status == "" {
+				if state, err := cm.runtime.State(containerName); err == nil {
+					status = strings.ToUpper(state)
+				} else {
+					// Check if container directory exists but runtime doesn't know about it
+					if _, err := os.Stat(filepath.Join(cm.cfg.ContainersPath, containerName)); err == nil {
+						status = StatusStopped
+					} else {
+						status = StatusUnknown
+					}
 				}
 			}
 
@@ -1367,9 +1410,14 @@ func (cm *ContainerManager) Start(name string, detach bool) error {
 	logger.Log(fmt.Sprintf("Attempting to clean up any existing runtime state for '%s'", name))
 	cm.runtime.Delete(name, true) // Ignore error
 
+	// Update status to RUNNING when starting
+	cm.updateContainerStatus(name, StatusRunning)
+
 	// Use Run method which uses runc run
 	err = cm.runtime.Run(name, containerPath, detach, logPath)
 	if err != nil {
+		// Update status back to READY if start failed
+		cm.updateContainerStatus(name, StatusReady)
 		logger.Log(fmt.Sprintf("Failed to start container '%s': %v", name, err))
 		return err
 	}
@@ -1396,6 +1444,8 @@ func (cm *ContainerManager) Stop(name string, force bool) error {
 		logger.Log(fmt.Sprintf("Failed to stop container '%s': %v", name, err))
 		logDebug("Failed to stop container '%s': %v", name, err)
 	} else {
+		// Update status to STOPPED after successful stop
+		cm.updateContainerStatus(name, StatusStopped)
 		logger.Log(fmt.Sprintf("Successfully stopped container '%s'", name))
 		logDebug("Successfully stopped container '%s'", name)
 	}
