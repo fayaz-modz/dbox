@@ -1154,7 +1154,7 @@ func (cm *ContainerManager) Start(name string, detach bool) error {
 	// Check if container is already running
 	if state, err := cm.runtime.State(name); err == nil && state == "running" {
 		fmt.Printf("Container '%s' is already running\n", name)
-		return nil
+		return fmt.Errorf("container '%s' is already running", name)
 	}
 
 	// Check if container exists in filesystem
@@ -1219,6 +1219,12 @@ func (cm *ContainerManager) Stop(name string, force bool) error {
 	logPath := filepath.Join(cm.cfg.RunPath, "logs", name+".log")
 	logger := NewDboxLogger(logPath)
 	defer logger.Close()
+
+	// Check if container is already stopped
+	if state, err := cm.runtime.State(name); err == nil && state == "stopped" && !force {
+		fmt.Printf("Container '%s' is already stopped\n", name)
+		return fmt.Errorf("container '%s' is already stopped", name)
+	}
 
 	logger.Log(fmt.Sprintf("Stopping container '%s' (force=%v)", name, force))
 	err := cm.runtime.Stop(name, force)
