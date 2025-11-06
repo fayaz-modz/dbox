@@ -1670,6 +1670,19 @@ func (cm *ContainerManager) Stop(name string, force bool) error {
 		logDebug("Successfully stopped container '%s'", name)
 	}
 
+	// Unmount OverlayFS if it exists (ignore errors for containers without overlayfs)
+	containerPath := filepath.Join(cm.cfg.ContainersPath, name)
+	mergedPath := filepath.Join(containerPath, "merged")
+	if _, err := os.Stat(mergedPath); err == nil {
+		if unmountErr := cm.unmountOverlayFS(containerPath); unmountErr != nil {
+			logger.Log(fmt.Sprintf("Warning: failed to unmount OverlayFS for '%s': %v", name, unmountErr))
+			logDebug("Failed to unmount OverlayFS for '%s': %v", name, unmountErr)
+		} else {
+			logger.Log(fmt.Sprintf("Successfully unmounted OverlayFS for '%s'", name))
+			logDebug("Successfully unmounted OverlayFS for '%s'", name)
+		}
+	}
+
 	return err
 }
 
