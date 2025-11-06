@@ -976,6 +976,12 @@ func (cm *ContainerManager) unmountOverlayFS(containerPath string) error {
 		return nil // Nothing to unmount
 	}
 
+	// First check if it's actually mounted
+	if !cm.isOverlayFSMounted(containerPath) {
+		fmt.Printf("Info: %s is not mounted or not accessible\n", mergedPath)
+		return nil
+	}
+
 	// Try lazy unmount first for busy filesystems
 	cmd := exec.Command("umount", "-l", mergedPath)
 	output, err := cmd.CombinedOutput()
@@ -1590,6 +1596,28 @@ func (cm *ContainerManager) Start(name string, detach bool) error {
 		fmt.Printf("Starting container '%s' in foreground...\n", name)
 	}
 
+	// Check and remount overlayfs if needed (only if container uses overlayfs)
+	if !opts.NoOverlayFS {
+		if !cm.isOverlayFSMounted(containerPath) {
+			logger.Log(fmt.Sprintf("OverlayFS not mounted for '%s', attempting to remount", name))
+			
+			// Get rootfs source from image
+			rootfsSource, err := cm.imgMgr.GetRootfs(opts.Image)
+			if err != nil {
+				return fmt.Errorf("failed to get rootfs for overlayfs remount: %w", err)
+			}
+			
+			// Remount overlayfs
+			_, err = cm.mountOverlayFS(containerPath, rootfsSource)
+			if err != nil {
+				return fmt.Errorf("failed to remount overlayfs: %w", err)
+			}
+			logger.Log(fmt.Sprintf("Successfully remounted OverlayFS for '%s'", name))
+		} else {
+			logger.Log(fmt.Sprintf("OverlayFS already mounted for '%s'", name))
+		}
+	}
+
 	// Clean up any existing runtime state (ignore errors)
 	logger.Log(fmt.Sprintf("Attempting to clean up any existing runtime state for '%s'", name))
 	cm.runtime.Delete(name, true) // Ignore error
@@ -1965,6 +1993,34 @@ func (cm *ContainerManager) RunSetupScript(name, scriptPath string) error {
 		return fmt.Errorf("failed to write script to container: %w", err)
 	}
 	return cm.runtime.Exec(name, []string{"/bin/sh", "/tmp/setup.sh"})
+}
+
+func (cm *ContainerManager) isOverlayFSMounted(containerPath string) bool {
+	mergedPath := filepath.Join(containerPath, "merged")
+	
+	// Check if merged directory exists
+	if _, err := os.Stat(mergedPath); os.IsNotExist(err) {
+		return false
+	}
+	
+	// Check if it's actually a mount point
+	cmd := exec.Command("findmnt", "-n", "-o", "TARGET", mergedPath)
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	
+	isMounted := strings.TrimSpace(string(output)) == mergedPath
+	
+	// Additional check: try to access the filesystem
+	if isMounted {
+		if _, err := os.Stat(filepath.Join(mergedPath, "bin")); err != nil {
+			// Mount exists but filesystem isn't accessible
+			return false
+		}
+	}
+	
+	return isMounted
 }
 
 func (cm *ContainerManager) mountOverlayFS(containerPath, rootfsSource string) (string, error) {
