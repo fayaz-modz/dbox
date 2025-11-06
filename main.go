@@ -605,26 +605,117 @@ func rawCmd() *cobra.Command {
 }
 
 func infoCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "info",
+	cmd := &cobra.Command{
+		Use:   "info [container-name]",
 		Short: "Show configuration and runtime information",
+		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Printf("Configuration:\n")
-			fmt.Printf("  Runtime: %s\n", cfg.Runtime)
-			fmt.Printf("  Run Path: %s\n", cfg.RunPath)
-			fmt.Printf("  Containers Path: %s\n", cfg.ContainersPath)
+			if len(args) == 1 {
+				// Show container creation options
+				containerName := args[0]
+				containerPath := filepath.Join(cfg.ContainersPath, containerName)
+				
+				// Check if container exists
+				if _, err := os.Stat(containerPath); os.IsNotExist(err) {
+					return fmt.Errorf("container '%s' does not exist", containerName)
+				}
 
-			rt := NewRuntime(cfg)
-			version, err := rt.Version()
-			if err != nil {
-				fmt.Printf("  Runtime Version: error - %v\n", err)
+				// Read options.json file
+				optionsPath := filepath.Join(containerPath, "options.json")
+				optionsData, err := os.ReadFile(optionsPath)
+				if err != nil {
+					return fmt.Errorf("failed to read container options: %w", err)
+				}
+
+				var opts CreateOptions
+				if err := json.Unmarshal(optionsData, &opts); err != nil {
+					return fmt.Errorf("failed to parse container options: %w", err)
+				}
+
+				// Display container creation options
+				fmt.Printf("Container '%s' Creation Options:\n", containerName)
+				fmt.Printf("  Image: %s\n", opts.Image)
+				fmt.Printf("  Name: %s\n", opts.Name)
+				
+				if opts.ContainerConfig != "" {
+					fmt.Printf("  Container Config: %s\n", opts.ContainerConfig)
+				}
+				
+				if len(opts.Envs) > 0 {
+					fmt.Printf("  Environment Variables:\n")
+					for _, env := range opts.Envs {
+						fmt.Printf("    %s\n", env)
+					}
+				}
+				
+				fmt.Printf("  No OverlayFS: %t\n", opts.NoOverlayFS)
+				fmt.Printf("  Privileged: %t\n", opts.Privileged)
+				fmt.Printf("  Network Namespace: %s\n", opts.NetNamespace)
+				fmt.Printf("  TTY: %t\n", opts.TTY)
+				
+				if opts.InitProcess != "" {
+					fmt.Printf("  Init Process: %s\n", opts.InitProcess)
+				}
+				
+				// Resource limits
+				if opts.CPUQuota != 0 || opts.CPUPeriod != 0 || opts.MemoryLimit != 0 || 
+				   opts.MemorySwap != 0 || opts.CPUShares != 0 || opts.BlkioWeight != 0 {
+					fmt.Printf("  Resource Limits:\n")
+					if opts.CPUQuota != 0 {
+						fmt.Printf("    CPU Quota: %d microseconds\n", opts.CPUQuota)
+					}
+					if opts.CPUPeriod != 0 {
+						fmt.Printf("    CPU Period: %d microseconds\n", opts.CPUPeriod)
+					}
+					if opts.MemoryLimit != 0 {
+						fmt.Printf("    Memory Limit: %d bytes\n", opts.MemoryLimit)
+					}
+					if opts.MemorySwap != 0 {
+						fmt.Printf("    Memory Swap: %d bytes\n", opts.MemorySwap)
+					}
+					if opts.CPUShares != 0 {
+						fmt.Printf("    CPU Shares: %d\n", opts.CPUShares)
+					}
+					if opts.BlkioWeight != 0 {
+						fmt.Printf("    Block IO Weight: %d\n", opts.BlkioWeight)
+					}
+				}
+
+				return nil
 			} else {
-				fmt.Printf("  Runtime Version: %s\n", version)
-			}
+				// Show general configuration (original behavior)
+				fmt.Printf("Configuration:\n")
+				fmt.Printf("  Runtime: %s\n", cfg.Runtime)
+				fmt.Printf("  Run Path: %s\n", cfg.RunPath)
+				fmt.Printf("  Containers Path: %s\n", cfg.ContainersPath)
 
-			return nil
+				rt := NewRuntime(cfg)
+				version, err := rt.Version()
+				if err != nil {
+					fmt.Printf("  Runtime Version: error - %v\n", err)
+				} else {
+					fmt.Printf("  Runtime Version: %s\n", version)
+				}
+
+				return nil
+			}
 		},
 	}
+
+	// Add container name completion
+	cmd.ValidArgsFunction = func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+		if len(args) >= 1 {
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		}
+		cm := NewContainerManager(cfg)
+		names, err := cm.GetContainerNames()
+		if err != nil {
+			return nil, cobra.ShellCompDirectiveNoFileComp
+		}
+		return names, cobra.ShellCompDirectiveNoFileComp
+	}
+
+	return cmd
 }
 
 func setupCmd() *cobra.Command {
