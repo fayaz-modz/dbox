@@ -17,6 +17,7 @@ import (
 	. "dbox/image"
 	. "dbox/logger"
 	. "dbox/runtime"
+	"dbox/utils"
 )
 
 const (
@@ -380,23 +381,32 @@ func (cm *ContainerManager) GetContainerNames() ([]string, error) {
 }
 
 func (cm *ContainerManager) List() error {
+	return cm.ListWithContext(nil)
+}
+
+func (cm *ContainerManager) ListWithContext(ctx interface{}) error {
 	entries, err := os.ReadDir(cm.cfg.ContainersPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			fmt.Println("No containers found.")
+			utils.PrintEmptyState("containers")
 			return nil
 		}
 		return err
 	}
 
 	if len(entries) == 0 {
-		fmt.Println("No containers found.")
+		utils.PrintEmptyState("containers")
 		return nil
 	}
 
-	// Print header with proper column formatting
-	fmt.Printf("%-20s %-15s %-10s %s\n", "CONTAINER_NAME", "IMAGE", "STATUS", "CREATED")
-	fmt.Printf("%-20s %-15s %-10s %s\n", strings.Repeat("-", 20), strings.Repeat("-", 15), strings.Repeat("-", 10), strings.Repeat("-", 19))
+	// Use standard table formatting (will be JSON if --json flag is set)
+	var tf *utils.TableFormatter
+	if utils.IsJSONMode(ctx) {
+		tf = utils.NewJSONFormatter()
+	} else {
+		tf = utils.NewTableFormatter()
+	}
+	tf.AddHeader("CONTAINER_NAME", "IMAGE", "STATUS", "CREATED")
 
 	for _, entry := range entries {
 		if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {
@@ -458,8 +468,8 @@ func (cm *ContainerManager) List() error {
 				}
 			}
 
-			fmt.Printf("%-20s %-15s %-10s %s\n", containerName, imageName, status, createdTime)
+			tf.AddRow(containerName, imageName, status, createdTime)
 		}
 	}
-	return nil
+	return tf.Render()
 }

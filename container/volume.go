@@ -6,16 +6,22 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"text/tabwriter"
 	"time"
+
+	"dbox/utils"
 )
 
 // ListVolumes lists all volumes
 func (cm *ContainerManager) ListVolumes() error {
+	return cm.ListVolumesWithContext(nil)
+}
+
+// ListVolumesWithContext lists all volumes with optional context for JSON output
+func (cm *ContainerManager) ListVolumesWithContext(ctx interface{}) error {
 	volumesPath := cm.cfg.VolumesPath
 
 	if _, err := os.Stat(volumesPath); os.IsNotExist(err) {
-		fmt.Println("No volumes found")
+		utils.PrintEmptyState("volumes")
 		return nil
 	}
 
@@ -25,12 +31,17 @@ func (cm *ContainerManager) ListVolumes() error {
 	}
 
 	if len(entries) == 0 {
-		fmt.Println("No volumes found")
+		utils.PrintEmptyState("volumes")
 		return nil
 	}
 
-	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "NAME\tDRIVER\tMOUNTPOINT\tCREATED")
+	var w *utils.TableFormatter
+	if utils.IsJSONMode(ctx) {
+		w = utils.NewJSONFormatter()
+	} else {
+		w = utils.NewTableFormatter()
+	}
+	w.AddHeader("NAME", "DRIVER", "MOUNTPOINT", "CREATED")
 
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -54,7 +65,7 @@ func (cm *ContainerManager) ListVolumes() error {
 							created = "unknown"
 						}
 					}
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", metadata.Name, metadata.Driver, metadata.Mountpoint, created)
+					w.AddRow(metadata.Name, metadata.Driver, metadata.Mountpoint, created)
 				}
 			} else {
 				// Fallback for volumes without metadata
@@ -63,17 +74,22 @@ func (cm *ContainerManager) ListVolumes() error {
 				if info, err := entry.Info(); err == nil {
 					created = info.ModTime().Format(time.RFC3339)
 				}
-				fmt.Fprintf(w, "%s\tlocal\t%s\t%s\n", entry.Name(), dataPath, created)
+				w.AddRow(entry.Name(), "local", dataPath, created)
 			}
 		}
 	}
 
-	w.Flush()
+	return w.Render()
 	return nil
 }
 
 // InspectVolume displays detailed information about a volume
 func (cm *ContainerManager) InspectVolume(volumeName string) error {
+	return cm.InspectVolumeWithContext(volumeName, nil)
+}
+
+// InspectVolumeWithContext displays detailed information about a volume with optional context for JSON output
+func (cm *ContainerManager) InspectVolumeWithContext(volumeName string, ctx interface{}) error {
 	volumePath := filepath.Join(cm.cfg.VolumesPath, volumeName)
 
 	if _, err := os.Stat(volumePath); os.IsNotExist(err) {
@@ -90,21 +106,38 @@ func (cm *ContainerManager) InspectVolume(volumeName string) error {
 			Mountpoint string `json:"mountpoint"`
 		}
 		if json.Unmarshal(data, &metadata) == nil {
-			fmt.Printf("{\n")
-			fmt.Printf("  \"name\": \"%s\",\n", metadata.Name)
-			fmt.Printf("  \"driver\": \"%s\",\n", metadata.Driver)
-			fmt.Printf("  \"created_at\": \"%s\",\n", metadata.CreatedAt)
-			fmt.Printf("  \"mountpoint\": \"%s\"\n", metadata.Mountpoint)
-			fmt.Printf("}\n")
+			if utils.IsJSONMode(ctx) {
+				volumeInfo := map[string]interface{}{
+					"name":       metadata.Name,
+					"driver":     metadata.Driver,
+					"created_at": metadata.CreatedAt,
+					"mountpoint": metadata.Mountpoint,
+				}
+				return utils.PrintJSONData(volumeInfo)
+			} else {
+				utils.PrintSectionHeader("Volume Information")
+				utils.PrintKeyValue("Name", metadata.Name)
+				utils.PrintKeyValue("Driver", metadata.Driver)
+				utils.PrintKeyValue("Created At", metadata.CreatedAt)
+				utils.PrintKeyValue("Mountpoint", metadata.Mountpoint)
+			}
 		}
 	} else {
 		// Fallback for volumes without metadata
 		dataPath := filepath.Join(volumePath, "_data")
-		fmt.Printf("{\n")
-		fmt.Printf("  \"name\": \"%s\",\n", volumeName)
-		fmt.Printf("  \"driver\": \"local\",\n")
-		fmt.Printf("  \"mountpoint\": \"%s\"\n", dataPath)
-		fmt.Printf("}\n")
+		if utils.IsJSONMode(ctx) {
+			volumeInfo := map[string]interface{}{
+				"name":       volumeName,
+				"driver":     "local",
+				"mountpoint": dataPath,
+			}
+			return utils.PrintJSONData(volumeInfo)
+		} else {
+			utils.PrintSectionHeader("Volume Information")
+			utils.PrintKeyValue("Name", volumeName)
+			utils.PrintKeyValue("Driver", "local")
+			utils.PrintKeyValue("Mountpoint", dataPath)
+		}
 	}
 
 	return nil

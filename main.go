@@ -12,9 +12,7 @@ import (
 )
 
 var (
-	configPath string
-	verbose    bool
-	cfg        *Config
+	cfg *Config
 )
 
 func main() {
@@ -27,13 +25,23 @@ func main() {
 			if cmd.Name() == "completion" || cmd.Parent() != nil && cmd.Parent().Name() == "completion" {
 				return nil
 			}
+
+			// Get flag values from command
+			configPath, _ := cmd.Flags().GetString("config")
+			verbose, _ := cmd.Flags().GetBool("verbose")
+			jsonOutput, _ := cmd.Flags().GetBool("json")
+
 			var err error
 			cfg, err = LoadConfig(configPath)
 			if err != nil {
 				return fmt.Errorf("failed to load config: %w", err)
 			}
-			// Store config in command context
-			cmd.SetContext(context.WithValue(cmd.Context(), "config", cfg))
+
+			// Store config and flags in command context
+			ctx := context.WithValue(cmd.Context(), "config", cfg)
+			ctx = context.WithValue(ctx, "verbose", verbose)
+			ctx = context.WithValue(ctx, "json", jsonOutput)
+			cmd.SetContext(ctx)
 			return nil
 		},
 	}
@@ -41,14 +49,15 @@ func main() {
 	rootCmd.SilenceUsage = true
 
 	// Global flags
-	rootCmd.PersistentFlags().StringVarP(&configPath, "config", "c",
+	rootCmd.PersistentFlags().StringP("config", "c",
 		getEnvOrDefault("DBOX_CONFIG", "/etc/dbox/config.yaml"),
 		"Path to config file (or set DBOX_CONFIG env)")
-	rootCmd.PersistentFlags().BoolVar(&verbose, "verbose", false, "Enable verbose output with debug messages")
+	rootCmd.PersistentFlags().Bool("verbose", false, "Enable verbose output with debug messages")
+	rootCmd.PersistentFlags().Bool("json", false, "Output in JSON format for data commands")
 
 	// Commands
 	rootCmd.AddCommand(
-		cli.CreateCmd(configPath),
+		cli.CreateCmd(""),
 		cli.CreateBackgroundCmd(),
 		cli.ListCmd(),
 		cli.StartCmd(),
@@ -57,7 +66,7 @@ func main() {
 		cli.RecreateCmd(),
 		cli.DeleteCmd(),
 		cli.ExecCmd(),
-		cli.PullCmd(configPath),
+		cli.PullCmd(""),
 		cli.RunCmd(),
 		cli.RawCmd(),
 		cli.LogsCmd(),

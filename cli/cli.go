@@ -20,6 +20,7 @@ import (
 	. "dbox/container"
 	. "dbox/image"
 	. "dbox/runtime"
+	"dbox/utils"
 )
 
 func PullCmd(configPath string) *cobra.Command {
@@ -177,6 +178,7 @@ func InfoCmd() *cobra.Command {
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := cmd.Context().Value("config").(*Config)
+			ctx := cmd.Context()
 			if len(args) == 1 {
 				// Show container creation options
 				containerName := args[0]
@@ -199,80 +201,170 @@ func InfoCmd() *cobra.Command {
 					return fmt.Errorf("failed to parse container options: %w", err)
 				}
 
-				// Display container creation options
-				fmt.Printf("Container '%s' Creation Options:\n", containerName)
-				fmt.Printf("  Image: %s\n", opts.Image)
-				fmt.Printf("  Name: %s\n", opts.Name)
-
-				if opts.ContainerConfig != "" {
-					fmt.Printf("  Container Config: %s\n", opts.ContainerConfig)
-				}
-
-				if len(opts.Envs) > 0 {
-					fmt.Printf("  Environment Variables:\n")
-					for _, env := range opts.Envs {
-						fmt.Printf("    %s\n", env)
+				if utils.IsJSONMode(ctx) {
+					// JSON output
+					containerInfo := map[string]interface{}{
+						"container": containerName,
+						"image":     opts.Image,
+						"name":      opts.Name,
 					}
-				}
 
-				fmt.Printf("  No OverlayFS: %t\n", opts.NoOverlayFS)
-				fmt.Printf("  Privileged: %t\n", opts.Privileged)
-				fmt.Printf("  Network Namespace: %s\n", opts.NetNamespace)
-				fmt.Printf("  TTY: %t\n", opts.TTY)
-
-				if opts.InitProcess != "" {
-					fmt.Printf("  Init Process: %s\n", opts.InitProcess)
-				}
-
-				if len(opts.Volumes) > 0 {
-					fmt.Printf("  Volumes:\n")
-					for _, vol := range opts.Volumes {
-						fmt.Printf("    %s\n", vol)
+					if opts.ContainerConfig != "" {
+						containerInfo["container_config"] = opts.ContainerConfig
 					}
-				}
 
-				// Resource limits
-				if opts.CPUQuota != 0 || opts.CPUPeriod != 0 || opts.MemoryLimit != 0 ||
-					opts.MemorySwap != 0 || opts.CPUShares != 0 || opts.BlkioWeight != 0 {
-					fmt.Printf("  Resource Limits:\n")
+					if len(opts.Envs) > 0 {
+						containerInfo["environment_variables"] = opts.Envs
+					}
+
+					containerInfo["no_overlayfs"] = opts.NoOverlayFS
+					containerInfo["privileged"] = opts.Privileged
+					containerInfo["network_namespace"] = opts.NetNamespace
+					containerInfo["tty"] = opts.TTY
+
+					if opts.InitProcess != "" {
+						containerInfo["init_process"] = opts.InitProcess
+					}
+
+					if len(opts.Volumes) > 0 {
+						containerInfo["volumes"] = opts.Volumes
+					}
+
+					// Resource limits
+					resourceLimits := make(map[string]interface{})
 					if opts.CPUQuota != 0 {
-						fmt.Printf("    CPU Quota: %d microseconds\n", opts.CPUQuota)
+						resourceLimits["cpu_quota"] = map[string]interface{}{
+							"value": opts.CPUQuota,
+							"unit":  "microseconds",
+						}
 					}
 					if opts.CPUPeriod != 0 {
-						fmt.Printf("    CPU Period: %d microseconds\n", opts.CPUPeriod)
+						resourceLimits["cpu_period"] = map[string]interface{}{
+							"value": opts.CPUPeriod,
+							"unit":  "microseconds",
+						}
 					}
 					if opts.MemoryLimit != 0 {
-						fmt.Printf("    Memory Limit: %d bytes\n", opts.MemoryLimit)
+						resourceLimits["memory_limit"] = map[string]interface{}{
+							"value": opts.MemoryLimit,
+							"unit":  "bytes",
+						}
 					}
 					if opts.MemorySwap != 0 {
-						fmt.Printf("    Memory Swap: %d bytes\n", opts.MemorySwap)
+						resourceLimits["memory_swap"] = map[string]interface{}{
+							"value": opts.MemorySwap,
+							"unit":  "bytes",
+						}
 					}
 					if opts.CPUShares != 0 {
-						fmt.Printf("    CPU Shares: %d\n", opts.CPUShares)
+						resourceLimits["cpu_shares"] = opts.CPUShares
 					}
 					if opts.BlkioWeight != 0 {
-						fmt.Printf("    Block IO Weight: %d\n", opts.BlkioWeight)
+						resourceLimits["blkio_weight"] = opts.BlkioWeight
 					}
-				}
+					if len(resourceLimits) > 0 {
+						containerInfo["resource_limits"] = resourceLimits
+					}
 
-				return nil
+					return utils.PrintJSONData(containerInfo)
+				} else {
+					// Display container creation options
+					utils.PrintSectionHeader(fmt.Sprintf("Container '%s' Creation Options", containerName))
+					utils.PrintKeyValue("Image", opts.Image)
+					utils.PrintKeyValue("Name", opts.Name)
+
+					if opts.ContainerConfig != "" {
+						utils.PrintKeyValue("Container Config", opts.ContainerConfig)
+					}
+
+					if len(opts.Envs) > 0 {
+						utils.PrintSectionHeader("Environment Variables")
+						for _, env := range opts.Envs {
+							fmt.Printf("    %s\n", env)
+						}
+					}
+
+					utils.PrintKeyValue("No OverlayFS", fmt.Sprintf("%t", opts.NoOverlayFS))
+					utils.PrintKeyValue("Privileged", fmt.Sprintf("%t", opts.Privileged))
+					utils.PrintKeyValue("Network Namespace", opts.NetNamespace)
+					utils.PrintKeyValue("TTY", fmt.Sprintf("%t", opts.TTY))
+
+					if opts.InitProcess != "" {
+						utils.PrintKeyValue("Init Process", opts.InitProcess)
+					}
+
+					if len(opts.Volumes) > 0 {
+						utils.PrintSectionHeader("Volumes")
+						for _, vol := range opts.Volumes {
+							fmt.Printf("    %s\n", vol)
+						}
+					}
+
+					// Resource limits
+					if opts.CPUQuota != 0 || opts.CPUPeriod != 0 || opts.MemoryLimit != 0 ||
+						opts.MemorySwap != 0 || opts.CPUShares != 0 || opts.BlkioWeight != 0 {
+						utils.PrintSectionHeader("Resource Limits")
+						if opts.CPUQuota != 0 {
+							utils.PrintKeyValue("CPU Quota", fmt.Sprintf("%d microseconds", opts.CPUQuota))
+						}
+						if opts.CPUPeriod != 0 {
+							utils.PrintKeyValue("CPU Period", fmt.Sprintf("%d microseconds", opts.CPUPeriod))
+						}
+						if opts.MemoryLimit != 0 {
+							utils.PrintKeyValue("Memory Limit", fmt.Sprintf("%d bytes", opts.MemoryLimit))
+						}
+						if opts.MemorySwap != 0 {
+							utils.PrintKeyValue("Memory Swap", fmt.Sprintf("%d bytes", opts.MemorySwap))
+						}
+						if opts.CPUShares != 0 {
+							utils.PrintKeyValue("CPU Shares", fmt.Sprintf("%d", opts.CPUShares))
+						}
+						if opts.BlkioWeight != 0 {
+							utils.PrintKeyValue("Block IO Weight", fmt.Sprintf("%d", opts.BlkioWeight))
+						}
+					}
+
+					return nil
+				}
 			} else {
 				// Show general configuration (original behavior)
-				fmt.Printf("Configuration:\n")
-				fmt.Printf("  Runtime: %s\n", cfg.Runtime)
-				fmt.Printf("  Run Path: %s\n", cfg.RunPath)
-				fmt.Printf("  Containers Path: %s\n", cfg.ContainersPath)
-				fmt.Printf("  Volumes Path: %s\n", cfg.VolumesPath)
+				if utils.IsJSONMode(ctx) {
+					// JSON output
+					configInfo := map[string]interface{}{
+						"runtime":         cfg.Runtime,
+						"run_path":        cfg.RunPath,
+						"containers_path": cfg.ContainersPath,
+						"volumes_path":    cfg.VolumesPath,
+					}
 
-				rt := NewRuntime(cfg)
-				version, err := rt.Version()
-				if err != nil {
-					fmt.Printf("  Runtime Version: error - %v\n", err)
+					rt := NewRuntime(cfg)
+					version, err := rt.Version()
+					if err != nil {
+						configInfo["runtime_version"] = map[string]interface{}{
+							"error": err.Error(),
+						}
+					} else {
+						configInfo["runtime_version"] = version
+					}
+
+					return utils.PrintJSONData(configInfo)
 				} else {
-					fmt.Printf("  Runtime Version: %s\n", version)
-				}
+					utils.PrintSectionHeader("Configuration")
+					utils.PrintKeyValue("Runtime", cfg.Runtime)
+					utils.PrintKeyValue("Run Path", cfg.RunPath)
+					utils.PrintKeyValue("Containers Path", cfg.ContainersPath)
+					utils.PrintKeyValue("Volumes Path", cfg.VolumesPath)
 
-				return nil
+					rt := NewRuntime(cfg)
+					version, err := rt.Version()
+					if err != nil {
+						utils.PrintKeyValue("Runtime Version", fmt.Sprintf("error - %v", err))
+					} else {
+						utils.PrintKeyValue("Runtime Version", version)
+					}
+
+					return nil
+				}
 			}
 		},
 	}
@@ -333,6 +425,7 @@ func StatusCmd() *cobra.Command {
 			cfg := cmd.Context().Value("config").(*Config)
 			name := args[0]
 			rt := NewRuntime(cfg)
+			ctx := cmd.Context()
 
 			// First check metadata for stored status (like List command does)
 			metadataPath := filepath.Join(cfg.ContainersPath, name, "metadata.json")
@@ -369,39 +462,88 @@ func StatusCmd() *cobra.Command {
 				}
 			}
 
-			fmt.Printf("Container: %s\n", name)
-			fmt.Printf("Status: %s\n", status)
+			if utils.IsJSONMode(ctx) {
+				// JSON output
+				statusData := map[string]interface{}{
+					"container": name,
+					"status":    status,
+				}
 
-			// Get metadata
-			if data, err := os.ReadFile(metadataPath); err == nil {
-				var metadata map[string]any
-				if json.Unmarshal(data, &metadata) == nil {
-					fmt.Printf("Image: %s\n", metadata["image"])
-					if vmMode, ok := metadata["vm_mode"].(bool); ok && vmMode {
-						fmt.Println("Type: VM Container")
-						if vmConfig, ok := metadata["vm_config"].(map[string]any); ok {
-							if enableSSH, ok := vmConfig["EnableSSH"].(bool); ok && enableSSH {
-								fmt.Printf("SSH: Enabled on port %v\n", vmConfig["SSHPort"])
-							}
-							if hostname, ok := vmConfig["Hostname"].(string); ok && hostname != "" {
-								fmt.Printf("Hostname: %s\n", hostname)
+				// Get metadata
+				if data, err := os.ReadFile(metadataPath); err == nil {
+					var metadata map[string]any
+					if json.Unmarshal(data, &metadata) == nil {
+						statusData["image"] = metadata["image"]
+						if vmMode, ok := metadata["vm_mode"].(bool); ok && vmMode {
+							statusData["type"] = "VM Container"
+							if vmConfig, ok := metadata["vm_config"].(map[string]any); ok {
+								vmData := make(map[string]interface{})
+								if enableSSH, ok := vmConfig["EnableSSH"].(bool); ok && enableSSH {
+									vmData["ssh"] = fmt.Sprintf("Enabled on port %v", vmConfig["SSHPort"])
+								}
+								if hostname, ok := vmConfig["Hostname"].(string); ok && hostname != "" {
+									vmData["hostname"] = hostname
+								}
+								if len(vmData) > 0 {
+									statusData["vm_config"] = vmData
+								}
 							}
 						}
 					}
 				}
-			}
 
-			// Show log location
-			logPath := filepath.Join(cfg.RunPath, "logs", name+".log")
-			fmt.Printf("\nUnified log file: %s\n", logPath)
-			if _, err := os.Stat(logPath); err == nil {
-				fmt.Println("Log contains: Container output, Runtime logs, and Dbox operations")
-			}
+				// Log information
+				logPath := filepath.Join(cfg.RunPath, "logs", name+".log")
+				statusData["log_file"] = logPath
 
-			if status == "RUNNING" {
-				fmt.Println("\nTo attach: dbox attach", name)
-				fmt.Println("To view logs: dbox logs", name)
-				fmt.Println("To view init logs: dbox exec", name, "cat /var/log/dbox-init.log")
+				if status == "RUNNING" {
+					statusData["available_commands"] = map[string]string{
+						"attach":    "dbox attach " + name,
+						"logs":      "dbox logs " + name,
+						"init_logs": "dbox exec " + name + " cat /var/log/dbox-init.log",
+					}
+				}
+
+				return utils.PrintJSONData(statusData)
+			} else {
+				// Regular text output
+				utils.PrintSectionHeader("Container Status")
+				utils.PrintKeyValue("Container", name)
+				utils.PrintKeyValue("Status", status)
+
+				// Get metadata
+				if data, err := os.ReadFile(metadataPath); err == nil {
+					var metadata map[string]any
+					if json.Unmarshal(data, &metadata) == nil {
+						utils.PrintKeyValue("Image", fmt.Sprintf("%v", metadata["image"]))
+						if vmMode, ok := metadata["vm_mode"].(bool); ok && vmMode {
+							utils.PrintKeyValue("Type", "VM Container")
+							if vmConfig, ok := metadata["vm_config"].(map[string]any); ok {
+								if enableSSH, ok := vmConfig["EnableSSH"].(bool); ok && enableSSH {
+									utils.PrintKeyValue("SSH", fmt.Sprintf("Enabled on port %v", vmConfig["SSHPort"]))
+								}
+								if hostname, ok := vmConfig["Hostname"].(string); ok && hostname != "" {
+									utils.PrintKeyValue("Hostname", hostname)
+								}
+							}
+						}
+					}
+				}
+
+				// Show log location
+				logPath := filepath.Join(cfg.RunPath, "logs", name+".log")
+				utils.PrintSectionHeader("Log Information")
+				utils.PrintKeyValue("Log file", logPath)
+				if _, err := os.Stat(logPath); err == nil {
+					utils.PrintInfo("Log contains: Container output, Runtime logs, and Dbox operations")
+				}
+
+				if status == "RUNNING" {
+					utils.PrintSectionHeader("Available Commands")
+					utils.PrintInfo("To attach: dbox attach " + name)
+					utils.PrintInfo("To view logs: dbox logs " + name)
+					utils.PrintInfo("To view init logs: dbox exec " + name + " cat /var/log/dbox-init.log")
+				}
 			}
 
 			return nil

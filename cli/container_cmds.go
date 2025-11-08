@@ -22,7 +22,7 @@ func ListCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := cmd.Context().Value("config").(*Config)
 			cm := NewContainerManager(cfg)
-			return cm.List()
+			return cm.ListWithContext(cmd.Context())
 		},
 	}
 }

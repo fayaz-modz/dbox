@@ -31,7 +31,7 @@ func volumeListCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := cmd.Context().Value("config").(*Config)
 			cm := NewContainerManager(cfg)
-			return cm.ListVolumes()
+			return cm.ListVolumesWithContext(cmd.Context())
 		},
 	}
 
@@ -47,7 +47,7 @@ func volumeInspectCmd() *cobra.Command {
 			cfg := cmd.Context().Value("config").(*Config)
 			cm := NewContainerManager(cfg)
 			for _, volumeName := range args {
-				if err := cm.InspectVolume(volumeName); err != nil {
+				if err := cm.InspectVolumeWithContext(volumeName, cmd.Context()); err != nil {
 					return err
 				}
 			}
