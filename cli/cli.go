@@ -262,6 +262,7 @@ func InfoCmd() *cobra.Command {
 				fmt.Printf("  Runtime: %s\n", cfg.Runtime)
 				fmt.Printf("  Run Path: %s\n", cfg.RunPath)
 				fmt.Printf("  Containers Path: %s\n", cfg.ContainersPath)
+				fmt.Printf("  Volumes Path: %s\n", cfg.VolumesPath)
 
 				rt := NewRuntime(cfg)
 				version, err := rt.Version()
