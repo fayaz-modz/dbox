@@ -30,7 +30,7 @@ func (cm *ContainerManager) ListVolumes() error {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-	fmt.Fprintln(w, "VOLUME NAME\tDRIVER\tMOUNTPOINT")
+	fmt.Fprintln(w, "NAME\tDRIVER\tMOUNTPOINT\tCREATED")
 
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -42,14 +42,28 @@ func (cm *ContainerManager) ListVolumes() error {
 					Name       string `json:"name"`
 					Driver     string `json:"driver"`
 					Mountpoint string `json:"mountpoint"`
+					CreatedAt  string `json:"created_at"`
 				}
 				if json.Unmarshal(data, &metadata) == nil {
-					fmt.Fprintf(w, "%s\t%s\t%s\n", metadata.Name, metadata.Driver, metadata.Mountpoint)
+					created := metadata.CreatedAt
+					if created == "" {
+						// Fallback to directory modification time if created_at is not present
+						if info, err := entry.Info(); err == nil {
+							created = info.ModTime().Format(time.RFC3339)
+						} else {
+							created = "unknown"
+						}
+					}
+					fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", metadata.Name, metadata.Driver, metadata.Mountpoint, created)
 				}
 			} else {
 				// Fallback for volumes without metadata
 				dataPath := filepath.Join(volumePath, "_data")
-				fmt.Fprintf(w, "%s\tlocal\t%s\n", entry.Name(), dataPath)
+				created := "unknown"
+				if info, err := entry.Info(); err == nil {
+					created = info.ModTime().Format(time.RFC3339)
+				}
+				fmt.Fprintf(w, "%s\tlocal\t%s\t%s\n", entry.Name(), dataPath, created)
 			}
 		}
 	}
