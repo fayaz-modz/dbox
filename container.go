@@ -1426,9 +1426,11 @@ func (cm *ContainerManager) List() error {
 				}
 			}
 
-			// Check metadata status first for active states like CREATING
+			// Check metadata status first for active states like CREATING and READY
 			if metadataStatus == StatusCreating {
 				status = StatusCreating
+			} else if metadataStatus == StatusReady {
+				status = StatusReady
 			} else {
 				// For other states, check runtime state for accurate status
 				runtimeState, err := cm.runtime.State(containerName)

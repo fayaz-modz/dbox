@@ -796,9 +796,11 @@ func statusCmd() *cobra.Command {
 				}
 			}
 
-			// Check metadata status first for active states like CREATING
+			// Check metadata status first for active states like CREATING and READY
 			if status == StatusCreating {
 				// Keep CREATING status from metadata
+			} else if status == StatusReady {
+				// Keep READY status from metadata
 			} else {
 				// For other states, check runtime state for accurate status
 				runtimeState, err := rt.State(name)
