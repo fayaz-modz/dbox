@@ -201,7 +201,7 @@ func (cm *ContainerManager) stopContainerCreation(name string, logger *DboxLogge
 		if err := os.RemoveAll(containerPath); err != nil {
 			logger.Log(fmt.Sprintf("Failed to clean up partial container: %v", err))
 		} else {
-			logger.Log(fmt.Sprintf("Successfully cleaned up partial container"))
+			logger.Log("Successfully cleaned up partial container")
 		}
 	}
 
@@ -1424,11 +1424,12 @@ func (cm *ContainerManager) List() error {
 			}
 
 			// Check metadata status first for active states like CREATING and READY
-			if metadataStatus == StatusCreating {
+			switch metadataStatus {
+			case StatusCreating:
 				status = StatusCreating
-			} else if metadataStatus == StatusReady {
+			case StatusReady:
 				status = StatusReady
-			} else {
+			default:
 				// For other states, check runtime state for accurate status
 				runtimeState, err := cm.runtime.State(containerName)
 				if err != nil {
