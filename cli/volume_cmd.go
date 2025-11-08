@@ -1,12 +1,13 @@
-package main
+package cli
 
 import (
 	"github.com/spf13/cobra"
 
+	. "dbox/config"
 	. "dbox/container"
 )
 
-func volumeCmd() *cobra.Command {
+func VolumeCmd(cfg *Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "volume",
 		Short: "Manage volumes",
@@ -14,16 +15,16 @@ func volumeCmd() *cobra.Command {
 	}
 
 	cmd.AddCommand(
-		volumeListCmd(),
-		volumeInspectCmd(),
-		volumeCreateCmd(),
-		volumeRemoveCmd(),
+		volumeListCmd(cfg),
+		volumeInspectCmd(cfg),
+		volumeCreateCmd(cfg),
+		volumeRemoveCmd(cfg),
 	)
 
 	return cmd
 }
 
-func volumeListCmd() *cobra.Command {
+func volumeListCmd(cfg *Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "ls",
 		Short:   "List volumes",
@@ -37,7 +38,7 @@ func volumeListCmd() *cobra.Command {
 	return cmd
 }
 
-func volumeInspectCmd() *cobra.Command {
+func volumeInspectCmd(cfg *Config) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "inspect [volume-name]",
 		Short: "Display detailed information on one or more volumes",
@@ -56,7 +57,7 @@ func volumeInspectCmd() *cobra.Command {
 	return cmd
 }
 
-func volumeCreateCmd() *cobra.Command {
+func volumeCreateCmd(cfg *Config) *cobra.Command {
 	var (
 		driver string
 		opts   []string
@@ -78,7 +79,7 @@ func volumeCreateCmd() *cobra.Command {
 	return cmd
 }
 
-func volumeRemoveCmd() *cobra.Command {
+func volumeRemoveCmd(cfg *Config) *cobra.Command {
 	var force bool
 
 	cmd := &cobra.Command{
