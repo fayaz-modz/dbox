@@ -32,7 +32,6 @@ dbox recreate test --privileged  # Fix/modify container
 
 - 🐳 Pull images from OCI registries (Docker Hub, etc.)
 - 📦 Create and manage containers with custom configurations
-- 🔧 Custom setup scripts (run during or after container creation)
 - 🎯 Built-in support for popular distros (Alpine, Ubuntu, Arch, Fedora, Kali, Debian)
 - 🚀 Proxy to underlying runtime (crun/runc) with enhanced features
 - ⚙️ Custom mount points, SSH setup, user management
@@ -266,9 +265,6 @@ dbox run -i alpine -n test -e VAR=value -e ANOTHER=value
 
 # Create with custom configuration
 dbox create -i ubuntu:22.04 -n dev --container-config config.json
-
-# Run setup script
-dbox setup my-container -s setup.sh
 
 # View container logs
 dbox logs my-container
@@ -1006,13 +1002,6 @@ dbox pull [image] [flags]
 Optional:
   --dns strings    DNS servers to use for image pulls
 # Shows real-time download progress and extraction status by default
-```
-
-#### **setup** - Run setup script in existing container
-```bash
-dbox setup [container-name] [flags]
-Required:
-  -s, --script string    Path to setup script
 ```
 
 #### **script** - Run a script in an existing container
