@@ -1,4 +1,4 @@
-package main
+package volume
 
 import (
 	"fmt"
@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
+
+	. "dbox/config"
 )
 
 // VolumeMount represents a parsed volume mount configuration

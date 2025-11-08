@@ -1,4 +1,4 @@
-package main
+package runtime
 
 import (
 	"encoding/json"
@@ -12,6 +12,9 @@ import (
 	"time"
 
 	spec "github.com/opencontainers/runtime-spec/specs-go"
+
+	. "dbox/config"
+	. "dbox/logger"
 )
 
 type Runtime struct {
@@ -33,7 +36,7 @@ func isTerminal() bool {
 }
 
 func (r *Runtime) Create(containerID, bundlePath string) error {
-	logVerbose("Creating container '%s' with bundle '%s'", containerID, bundlePath)
+	LogVerbose("Creating container '%s' with bundle '%s'", containerID, bundlePath)
 	parentDir := r.cfg.RunPath
 	if err := os.MkdirAll(parentDir, 0755); err != nil {
 		return fmt.Errorf("failed to create parent runtime directory '%s': %w", parentDir, err)
@@ -47,7 +50,7 @@ func (r *Runtime) Create(containerID, bundlePath string) error {
 		containerID,
 	)
 
-	logCommand(r.cfg.Runtime, []string{"--root", r.cfg.RunPath, "create", "--bundle", bundlePath, containerID})
+	LogCommand(r.cfg.Runtime, []string{"--root", r.cfg.RunPath, "create", "--bundle", bundlePath, containerID})
 
 	// Use Start() and Wait() instead of CombinedOutput()
 	// This can sometimes behave differently if the command is doing strange things with stdio.
@@ -60,29 +63,29 @@ func (r *Runtime) Create(containerID, bundlePath string) error {
 }
 
 func (r *Runtime) Start(containerID, logPath string, detach bool) error {
-	logVerbose("Starting container '%s'", containerID)
+	LogVerbose("Starting container '%s'", containerID)
 	// Check container state first
 	state, err := r.State(containerID)
 	if err != nil {
 		// If container doesn't exist in runtime, we need to recreate it
 		if strings.Contains(err.Error(), "does not exist") {
-			logVerbose("Container '%s' not found in runtime, recreating automatically", containerID)
+			LogVerbose("Container '%s' not found in runtime, recreating automatically", containerID)
 			// Find the container bundle path
 			bundlePath := filepath.Join(r.cfg.ContainersPath, containerID)
 
-			// Use the same logic as stopped containers - run with output capture
+			// Use the same Logic as stopped containers - run with output capture
 			// run command combines create + start, so we don't need separate create
-			logVerbose("Running recreated container with bundle: %s, logPath: %s", bundlePath, logPath)
+			LogVerbose("Running recreated container with bundle: %s, logPath: %s", bundlePath, logPath)
 			return r.Run(containerID, bundlePath, detach, logPath)
 		}
 		return fmt.Errorf("failed to get container state: %w", err)
 	}
 
-	logVerbose("Container '%s' state: %s", containerID, state)
+	LogVerbose("Container '%s' state: %s", containerID, state)
 
 	// If container is already running, nothing to do
 	if state == "running" {
-		logVerbose("Container already running, nothing to do")
+		LogVerbose("Container already running, nothing to do")
 		return nil
 	}
 
@@ -91,17 +94,17 @@ func (r *Runtime) Start(containerID, logPath string, detach bool) error {
 
 	// For stopped containers, we need to delete and recreate to capture output properly
 	if state == "stopped" {
-		logVerbose("Container is in 'stopped' state, using Run() method for output capture")
+		LogVerbose("Container is in 'stopped' state, using Run() method for output capture")
 		// Delete from runtime first
 		deleteArgs := []string{"--root", r.cfg.RunPath, "delete", containerID}
 		deleteCmd := exec.Command(r.cfg.Runtime, deleteArgs...)
-		logCommand(r.cfg.Runtime, deleteArgs)
+		LogCommand(r.cfg.Runtime, deleteArgs)
 		if err := deleteCmd.Run(); err != nil {
 			return fmt.Errorf("failed to delete container for restart: %w", err)
 		}
 
 		// Now run with output capture
-		logVerbose("Running container with bundle: %s, logPath: %s", bundlePath, logPath)
+		LogVerbose("Running container with bundle: %s, logPath: %s", bundlePath, logPath)
 		return r.Run(containerID, bundlePath, detach, logPath)
 	}
 
@@ -113,7 +116,7 @@ func (r *Runtime) Start(containerID, logPath string, detach bool) error {
 	args = append(args, "start", containerID)
 
 	cmd := exec.Command(r.cfg.Runtime, args...)
-	logCommand(r.cfg.Runtime, args)
+	LogCommand(r.cfg.Runtime, args)
 
 	if detach {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
@@ -176,13 +179,13 @@ func (r *Runtime) Stop(containerID string, force bool) error {
 
 	// If container is already stopped, nothing to do
 	if state == "stopped" {
-		logVerbose("Container already stopped")
+		LogVerbose("Container already stopped")
 		return nil
 	}
 
 	// For created containers, just delete them since they're not running
 	if state == "created" {
-		logVerbose("Container is in 'created' state, deleting instead of killing")
+		LogVerbose("Container is in 'created' state, deleting instead of killing")
 		return r.Delete(containerID, false)
 	}
 
@@ -200,7 +203,7 @@ func (r *Runtime) Stop(containerID string, force bool) error {
 		signal,
 	)
 
-	logCommand(r.cfg.Runtime, []string{"--root", r.cfg.RunPath, "kill", containerID, signal})
+	LogCommand(r.cfg.Runtime, []string{"--root", r.cfg.RunPath, "kill", containerID, signal})
 
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -214,7 +217,7 @@ func (r *Runtime) Stop(containerID string, force bool) error {
 }
 
 func (r *Runtime) Delete(containerID string, force bool) error {
-	logVerbose("Deleting container '%s' (force=%v)", containerID, force)
+	LogVerbose("Deleting container '%s' (force=%v)", containerID, force)
 	args := []string{
 		"--root", r.cfg.RunPath,
 		"delete",
@@ -227,7 +230,7 @@ func (r *Runtime) Delete(containerID string, force bool) error {
 	args = append(args, containerID)
 
 	cmd := exec.Command(r.cfg.Runtime, args...)
-	logCommand(r.cfg.Runtime, args)
+	LogCommand(r.cfg.Runtime, args)
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -238,7 +241,7 @@ func (r *Runtime) Delete(containerID string, force bool) error {
 }
 
 func (r *Runtime) List() ([]string, error) {
-	logVerbose("Listing containers")
+	LogVerbose("Listing containers")
 	cmd := exec.Command(
 		r.cfg.Runtime,
 		"--root", r.cfg.RunPath,
@@ -246,7 +249,7 @@ func (r *Runtime) List() ([]string, error) {
 		"--format", "json",
 	)
 
-	logCommand(r.cfg.Runtime, []string{"--root", r.cfg.RunPath, "list", "--format", "json"})
+	LogCommand(r.cfg.Runtime, []string{"--root", r.cfg.RunPath, "list", "--format", "json"})
 
 	output, err := cmd.Output()
 	if err != nil {

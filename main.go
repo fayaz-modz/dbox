@@ -15,6 +15,12 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	. "dbox/config"
+	. "dbox/container"
+	. "dbox/image"
+	. "dbox/logger"
+	. "dbox/runtime"
 )
 
 var (
@@ -22,60 +28,6 @@ var (
 	verbose    bool
 	cfg        *Config
 )
-
-type DboxLogger struct {
-	logFile *os.File
-}
-
-func NewDboxLogger(logPath string) *DboxLogger {
-	if logPath == "" {
-		return &DboxLogger{}
-	}
-
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-	if err != nil {
-		return &DboxLogger{}
-	}
-
-	return &DboxLogger{logFile: logFile}
-}
-
-func (l *DboxLogger) Log(message string) {
-	if l.logFile != nil {
-		timestamp := time.Now().Format(time.RFC3339)
-		logEntry := fmt.Sprintf("[%s] DBOX: %s\n", timestamp, message)
-		l.logFile.WriteString(logEntry)
-		l.logFile.Sync()
-	}
-}
-
-func (l *DboxLogger) Close() {
-	if l.logFile != nil {
-		l.logFile.Close()
-	}
-}
-
-func logInfo(format string, args ...any) {
-	fmt.Printf("dbox: "+format+"\n", args...)
-}
-
-func logVerbose(format string, args ...any) {
-	if verbose {
-		fmt.Printf("dbox: "+format+"\n", args...)
-	}
-}
-
-func logDebug(format string, args ...any) {
-	if verbose {
-		fmt.Printf("dbox: DEBUG: "+format+"\n", args...)
-	}
-}
-
-func logCommand(cmd string, args []string) {
-	if verbose {
-		fmt.Printf("dbox: RUNNING: %s %s\n", cmd, strings.Join(args, " "))
-	}
-}
 
 func main() {
 	rootCmd := &cobra.Command{
@@ -120,11 +72,9 @@ func main() {
 		rawCmd(),
 		logsCmd(),
 		infoCmd(),
-		setupCmd(),
 		cleanCmd(),
 		attachCmd(),
 		usageCmd(),
-		scriptCmd(),
 		volumeCmd(),
 		completionCmd(rootCmd),
 	)
@@ -732,30 +682,6 @@ func infoCmd() *cobra.Command {
 	return cmd
 }
 
-func setupCmd() *cobra.Command {
-	var scriptPath string
-
-	cmd := &cobra.Command{
-		Use:   "setup [container-name]",
-		Short: "Run a setup script in an existing container",
-		Args:  cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cm := NewContainerManager(cfg)
-			return cm.RunSetupScript(args[0], scriptPath)
-		},
-	}
-
-	cmd.Flags().StringVarP(&scriptPath, "script", "s", "", "Path to setup script")
-
-	cmd.RegisterFlagCompletionFunc("script", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-		return nil, cobra.ShellCompDirectiveDefault // Allow file completion
-	})
-
-	cmd.MarkFlagRequired("script")
-
-	return cmd
-}
-
 func cleanCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "clean",
@@ -897,46 +823,6 @@ func usageCmd() *cobra.Command {
 	return cmd
 }
 
-func scriptCmd() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "script [container-name] [script-path]",
-		Short: "Run a script in an existing container",
-		Args:  cobra.ExactArgs(2),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cm := NewContainerManager(cfg)
-			return cm.RunScript(args[0], args[1])
-		},
-	}
-
-	cmd.ValidArgsFunction = func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-		if len(args) == 0 {
-			// Complete container names for first argument
-			var config *Config
-			var err error
-			config, err = LoadConfig(configPath)
-			if err != nil {
-				// Try local config.yaml
-				config, err = LoadConfig("config.yaml")
-				if err != nil {
-					return nil, cobra.ShellCompDirectiveNoFileComp
-				}
-			}
-			cm := NewContainerManager(config)
-			names, err := cm.GetContainerNames()
-			if err != nil {
-				return nil, cobra.ShellCompDirectiveNoFileComp
-			}
-			return names, cobra.ShellCompDirectiveNoFileComp
-		} else if len(args) == 1 {
-			// Allow file completion for script path
-			return nil, cobra.ShellCompDirectiveDefault
-		}
-		return nil, cobra.ShellCompDirectiveNoFileComp
-	}
-
-	return cmd
-}
-
 func completionCmd(rootCmd *cobra.Command) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "completion [bash|zsh|fish|powershell]",
@@ -1070,7 +956,7 @@ func createBackgroundCmd() *cobra.Command {
 
 			logger.Log(fmt.Sprintf("Creating container '%s' from image '%s'", name, image))
 
-			if err := cm.createContainer(opts, logger); err != nil {
+			if err := cm.CreateContainer(opts, logger); err != nil {
 				logger.Log(fmt.Sprintf("Failed to create container '%s': %v", name, err))
 				return err
 			}
