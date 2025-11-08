@@ -132,14 +132,30 @@ func (cm *ContainerManager) isOverlayFSMounted(containerPath string) bool {
 		return false
 	}
 
-	// Check if it's actually a mount point
-	cmd := exec.Command("findmnt", "-n", "-o", "TARGET", mergedPath)
-	output, err := cmd.Output()
+	// Check if it's actually a mount point by reading /proc/mounts
+	mountsFile, err := os.Open("/proc/mounts")
 	if err != nil {
-		return false
+		// Fallback: try using findmnt if /proc/mounts is not available
+		println("Warning: failed to read /proc/mounts, using findmnt to check if " + mergedPath + " is a mount point")
+		cmd := exec.Command("findmnt", "-n", "-o", "TARGET", mergedPath)
+		output, err := cmd.Output()
+		if err != nil {
+			return false
+		}
+		isMounted := strings.TrimSpace(string(output)) == mergedPath
+		if isMounted {
+			if _, err := os.Stat(filepath.Join(mergedPath, "bin")); err != nil {
+				return false
+			}
+		}
+		return isMounted
 	}
+	defer mountsFile.Close()
 
-	isMounted := strings.TrimSpace(string(output)) == mergedPath
+	// Read /proc/mounts to check if mergedPath is a mount point
+	scanner := fmt.Sprintf("%s ", mergedPath)
+	content, _ := io.ReadAll(mountsFile)
+	isMounted := strings.Contains(string(content), scanner)
 
 	// Additional check: try to access the filesystem
 	if isMounted {
