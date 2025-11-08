@@ -13,6 +13,7 @@ type Config struct {
 	Runtime        string            `yaml:"runtime" json:"runtime"`
 	RunPath        string            `yaml:"runpath" json:"runpath"`
 	ContainersPath string            `yaml:"containers_path" json:"containers_path"`
+	VolumesPath    string            `yaml:"volumes_path" json:"volumes_path"`
 	Registries     map[string]string `yaml:"registries,omitempty" json:"registries,omitempty"`
 	DNS            []string          `yaml:"dns,omitempty" json:"dns,omitempty"`
 }
@@ -105,8 +106,12 @@ func (c *Config) validate() error {
 		c.ContainersPath = filepath.Join(home, ".local/share/dbox/containers")
 	}
 
+	if c.VolumesPath == "" {
+		c.VolumesPath = "/var/lib/dbox/volumes"
+	}
+
 	// Create directories if they don't exist
-	for _, dir := range []string{c.RunPath, c.ContainersPath} {
+	for _, dir := range []string{c.RunPath, c.ContainersPath, c.VolumesPath} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}

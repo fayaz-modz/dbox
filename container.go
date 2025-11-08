@@ -44,6 +44,7 @@ type CreateOptions struct {
 	Name            string
 	ContainerConfig string
 	Envs            []string
+	Volumes         []string
 	NoOverlayFS     bool
 	CPUQuota        int64
 	CPUPeriod       int64
@@ -84,6 +85,7 @@ type RecreateOptions struct {
 	Image           string
 	ContainerConfig string
 	Envs            []string
+	Volumes         []string
 	CPUQuota        int64
 	CPUPeriod       int64
 	MemoryLimit     int64
@@ -710,18 +712,13 @@ func (cm *ContainerManager) generateOCISpecUsingRuntime(bundlePath, imagePath, n
 		}
 	}
 
-	if runOpts != nil {
-		for _, vol := range runOpts.Volumes {
-			parts := strings.SplitN(vol, ":", 2)
-			if len(parts) != 2 {
-				return fmt.Errorf("invalid volume format: %s. Must be host-path:container-path", vol)
-			}
-			hostPath, containerPath := parts[0], parts[1]
-			mount := spec.Mount{
-				Destination: containerPath, Source: hostPath, Type: "bind",
-				Options: []string{"bind", "rw"},
-			}
-			ociSpec.Mounts = append(ociSpec.Mounts, mount)
+	if runOpts != nil && len(runOpts.Volumes) > 0 {
+		if err := ApplyVolumesToSpec(&ociSpec, runOpts.Volumes, cm.cfg); err != nil {
+			return err
+		}
+	} else if opts != nil && len(opts.Volumes) > 0 {
+		if err := ApplyVolumesToSpec(&ociSpec, opts.Volumes, cm.cfg); err != nil {
+			return err
 		}
 	}
 
@@ -1602,13 +1599,13 @@ func (cm *ContainerManager) Start(name string, detach bool) error {
 	if !opts.NoOverlayFS {
 		if !cm.isOverlayFSMounted(containerPath) {
 			logger.Log(fmt.Sprintf("OverlayFS not mounted for '%s', attempting to remount", name))
-			
+
 			// Get rootfs source from image
 			rootfsSource, err := cm.imgMgr.GetRootfs(opts.Image)
 			if err != nil {
 				return fmt.Errorf("failed to get rootfs for overlayfs remount: %w", err)
 			}
-			
+
 			// Remount overlayfs
 			_, err = cm.mountOverlayFS(containerPath, rootfsSource)
 			if err != nil {
@@ -1871,6 +1868,9 @@ func (cm *ContainerManager) RecreateWithOptions(opts *RecreateOptions) error {
 	if len(opts.Envs) > 0 {
 		currentOpts.Envs = opts.Envs
 	}
+	if len(opts.Volumes) > 0 {
+		currentOpts.Volumes = opts.Volumes
+	}
 	if opts.CPUQuota != 0 {
 		currentOpts.CPUQuota = opts.CPUQuota
 	}
@@ -2012,21 +2012,21 @@ func (cm *ContainerManager) RunSetupScript(name, scriptPath string) error {
 
 func (cm *ContainerManager) isOverlayFSMounted(containerPath string) bool {
 	mergedPath := filepath.Join(containerPath, "merged")
-	
+
 	// Check if merged directory exists
 	if _, err := os.Stat(mergedPath); os.IsNotExist(err) {
 		return false
 	}
-	
+
 	// Check if it's actually a mount point
 	cmd := exec.Command("findmnt", "-n", "-o", "TARGET", mergedPath)
 	output, err := cmd.Output()
 	if err != nil {
 		return false
 	}
-	
+
 	isMounted := strings.TrimSpace(string(output)) == mergedPath
-	
+
 	// Additional check: try to access the filesystem
 	if isMounted {
 		if _, err := os.Stat(filepath.Join(mergedPath, "bin")); err != nil {
@@ -2034,7 +2034,7 @@ func (cm *ContainerManager) isOverlayFSMounted(containerPath string) bool {
 			return false
 		}
 	}
-	
+
 	return isMounted
 }
 

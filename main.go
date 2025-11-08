@@ -125,6 +125,7 @@ func main() {
 		attachCmd(),
 		usageCmd(),
 		scriptCmd(),
+		volumeCmd(),
 		completionCmd(rootCmd),
 	)
 
@@ -139,6 +140,7 @@ func createCmd() *cobra.Command {
 		name         string
 		containerCfg string
 		envs         []string
+		volumes      []string
 		noOverlayFS  bool
 		detach       bool
 		dns          []string
@@ -166,6 +168,7 @@ func createCmd() *cobra.Command {
 				Name:            name,
 				ContainerConfig: containerCfg,
 				Envs:            envs,
+				Volumes:         volumes,
 				NoOverlayFS:     noOverlayFS,
 				CPUQuota:        cpuQuota,
 				CPUPeriod:       cpuPeriod,
@@ -199,6 +202,7 @@ func createCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&privileged, "privileged", false, "Run container in privileged mode")
 	cmd.Flags().StringVar(&netNamespace, "net", "host", "Network namespace (host, none, or container:name)")
 	cmd.Flags().BoolVarP(&tty, "tty", "t", false, "Allocate a pseudo-TTY for interactive sessions")
+	cmd.Flags().StringArrayVarP(&volumes, "volume", "v", []string{}, "Bind mount a volume (e.g., /host/path:/container/path or volume-name:/container/path)")
 	cmd.Flags().BoolVarP(&detach, "detach", "d", false, "Run container creation in background and log to file")
 
 	cmd.RegisterFlagCompletionFunc("image", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
@@ -286,6 +290,7 @@ func recreateCmd() *cobra.Command {
 		image        string
 		containerCfg string
 		envs         []string
+		volumes      []string
 		dns          []string
 		cpuQuota     int64
 		cpuPeriod    int64
@@ -313,6 +318,7 @@ func recreateCmd() *cobra.Command {
 				Image:           image,
 				ContainerConfig: containerCfg,
 				Envs:            envs,
+				Volumes:         volumes,
 				CPUQuota:        cpuQuota,
 				CPUPeriod:       cpuPeriod,
 				MemoryLimit:     memoryLimit,
@@ -333,6 +339,7 @@ func recreateCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&image, "image", "i", "", "Override image (e.g., alpine:latest)")
 	cmd.Flags().StringVar(&containerCfg, "container-config", "", "Override container_config.json")
 	cmd.Flags().StringArrayVarP(&envs, "env", "e", []string{}, "Override environment variables (e.g., -e FOO=bar)")
+	cmd.Flags().StringArrayVarP(&volumes, "volume", "v", []string{}, "Override volume mounts (e.g., -v /host/path:/container/path or volume-name:/container/path)")
 	cmd.Flags().StringArrayVar(&dns, "dns", []string{}, "DNS servers to use for image pulls (e.g., --dns 1.1.1.1 --dns 8.8.8.8)")
 	cmd.Flags().Int64Var(&cpuQuota, "cpu-quota", 0, "Override CPU quota in microseconds")
 	cmd.Flags().Int64Var(&cpuPeriod, "cpu-period", 0, "Override CPU period in microseconds")
@@ -614,7 +621,7 @@ func infoCmd() *cobra.Command {
 				// Show container creation options
 				containerName := args[0]
 				containerPath := filepath.Join(cfg.ContainersPath, containerName)
-				
+
 				// Check if container exists
 				if _, err := os.Stat(containerPath); os.IsNotExist(err) {
 					return fmt.Errorf("container '%s' does not exist", containerName)
@@ -636,30 +643,37 @@ func infoCmd() *cobra.Command {
 				fmt.Printf("Container '%s' Creation Options:\n", containerName)
 				fmt.Printf("  Image: %s\n", opts.Image)
 				fmt.Printf("  Name: %s\n", opts.Name)
-				
+
 				if opts.ContainerConfig != "" {
 					fmt.Printf("  Container Config: %s\n", opts.ContainerConfig)
 				}
-				
+
 				if len(opts.Envs) > 0 {
 					fmt.Printf("  Environment Variables:\n")
 					for _, env := range opts.Envs {
 						fmt.Printf("    %s\n", env)
 					}
 				}
-				
+
 				fmt.Printf("  No OverlayFS: %t\n", opts.NoOverlayFS)
 				fmt.Printf("  Privileged: %t\n", opts.Privileged)
 				fmt.Printf("  Network Namespace: %s\n", opts.NetNamespace)
 				fmt.Printf("  TTY: %t\n", opts.TTY)
-				
+
 				if opts.InitProcess != "" {
 					fmt.Printf("  Init Process: %s\n", opts.InitProcess)
 				}
-				
+
+				if len(opts.Volumes) > 0 {
+					fmt.Printf("  Volumes:\n")
+					for _, vol := range opts.Volumes {
+						fmt.Printf("    %s\n", vol)
+					}
+				}
+
 				// Resource limits
-				if opts.CPUQuota != 0 || opts.CPUPeriod != 0 || opts.MemoryLimit != 0 || 
-				   opts.MemorySwap != 0 || opts.CPUShares != 0 || opts.BlkioWeight != 0 {
+				if opts.CPUQuota != 0 || opts.CPUPeriod != 0 || opts.MemoryLimit != 0 ||
+					opts.MemorySwap != 0 || opts.CPUShares != 0 || opts.BlkioWeight != 0 {
 					fmt.Printf("  Resource Limits:\n")
 					if opts.CPUQuota != 0 {
 						fmt.Printf("    CPU Quota: %d microseconds\n", opts.CPUQuota)
