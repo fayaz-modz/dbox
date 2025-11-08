@@ -1,9 +1,5 @@
 # dbox - Container Management Tool
 
-[![Build Status](https://img.shields.io/github/workflow/status/yourusername/dbox/CI)](https://github.com/yourusername/dbox/actions)
-[![Go Report Card](https://goreportcard.com/badge/github.com/yourusername/dbox)](https://goreportcard.com/report/github.com/yourusername/dbox)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
 A lightweight distrobox-like container management tool written in Go that provides a simple interface for managing OCI containers using crun or runc.
 
 ## Quick Reference
@@ -26,6 +22,12 @@ dbox status test                # Container details
 dbox logs test                  # View logs
 dbox usage test                 # Resource monitoring
 dbox recreate test --privileged  # Fix/modify container
+
+# Volume management
+dbox volume ls                  # List volumes
+dbox volume create data         # Create volume
+dbox volume inspect data        # Inspect volume
+dbox volume rm data             # Remove volume
 ```
 
 ## Features
@@ -51,6 +53,9 @@ dbox recreate test --privileged  # Fix/modify container
 - 🔄 Enhanced container status tracking (CREATING → READY → RUNNING → STOPPED)
 - 📈 Real-time download progress with percentage indicators in logs
 - 🛑 Container creation can be stopped during creation process (both foreground and background modes)
+- 💾 Volume management with create, list, inspect, and remove operations
+- 📊 JSON output support for data commands with `--json` flag
+- 📋 Enhanced volume information display with creation timestamps
 
 ## Table of Contents
 
@@ -95,7 +100,7 @@ dbox run -i alpine:latest -n my-container
 
 ### Prerequisites
 
-- Go 1.23 or later
+- Go 1.25 or later
 - crun or runc installed
 - **For Docker-like experience without sudo: Set up the `dbox` group** (see Group Setup section below)
 - Root permissions only needed for initial group setup
@@ -249,6 +254,12 @@ dbox rm -f my-alpine  # Force delete
 
 # Clean image cache
 dbox clean
+
+# Volume management
+dbox volume ls
+dbox volume create data-volume
+dbox volume inspect data-volume
+dbox volume rm data-volume
 ```
 
 ### Advanced Commands
@@ -282,6 +293,17 @@ dbox usage my-container --pid --cgroup  # Show all information
 
 # Attach to running container
 dbox attach my-container
+
+# Volume management
+dbox volume ls                    # List all volumes
+dbox volume create app-data       # Create named volume
+dbox volume inspect app-data      # Show volume details
+dbox volume rm app-data           # Remove volume
+
+# JSON output for data commands
+dbox list --json                  # List containers in JSON format
+dbox volume ls --json             # List volumes in JSON format
+dbox status my-container --json   # Container status in JSON format
 
 # Enhanced recreate with overrides
 dbox recreate my-container --tty                    # Add TTY devices
@@ -728,9 +750,9 @@ dbox exec minimal /custom-init.sh
 
 ### Prerequisites
 
-- Go 1.23 or later
+- Go 1.25 or later
 - crun or runc installed
-- For cross-compilation: appropriate C compilers
+- For cross-compilation: appropriate C compilers (clang for amd64, gcc-aarch64-linux-gnu for arm64)
 
 ### Standard Build
 
@@ -854,6 +876,7 @@ The `container_config.json` supports:
 - `-c, --config`: Path to config file (or set `DBOX_CONFIG` env)
 - `-h, --help`: Show help
 - `--verbose`: Enable verbose output with debug messages
+- `--json`: Output in JSON format for data commands
 
 ### Available Commands
 
@@ -1027,6 +1050,25 @@ dbox raw [runtime-args...]
 #### **completion** - Generate the autocompletion script for the specified shell
 ```bash
 dbox completion [bash|zsh|fish]
+```
+
+#### **volume** - Manage volumes
+```bash
+dbox volume [command]
+
+Available Commands:
+  create      Create a volume
+  inspect     Display detailed information on one or more volumes
+  ls          List volumes
+  rm          Remove one or more volumes
+
+Examples:
+  dbox volume ls                           # List all volumes
+  dbox volume create data-volume           # Create a volume
+  dbox volume inspect data-volume          # Inspect a volume
+  dbox volume rm data-volume               # Remove a volume
+  dbox volume create --driver local opts   # Create with options
+  dbox volume rm -f data-volume            # Force remove volume
 ```
 
 **Note:** Completion works best when dbox is run as a regular user (see Group Setup). For sudo usage, see the "Shell Completion with sudo" section in Troubleshooting.
@@ -1495,6 +1537,10 @@ dbox is currently in **beta**. It's functional for basic container operations bu
 - [x] Raw runtime access
 - [x] Container attach functionality
 - [x] Setup script execution
+- [x] Volume management (create, list, inspect, remove)
+- [x] JSON output support for data commands
+- [x] Enhanced volume information with creation timestamps
+- [x] CLI refactoring with improved package structure
 
 ### 🚧 Planned Features
 - [ ] Container networking (advanced)
@@ -1505,6 +1551,9 @@ dbox is currently in **beta**. It's functional for basic container operations bu
 - [ ] Container export/import
 - [ ] Health checks
 - [ ] Auto-restart policies
+- [ ] Volume drivers beyond local
+- [ ] Container metrics and monitoring dashboard
+- [ ] Integration with container registries (push/pull)
 
 ## Contributing
 
@@ -1517,19 +1566,68 @@ git clone https://github.com/yourusername/dbox
 cd dbox
 go mod download
 go test ./...
+
+# Build for development
+go build -o dbox .
+
+# Or use the Makefile for cross-platform builds
+make help
+make linux-amd64    # Build for current platform
+make all           # Build for all platforms
 ```
 
 ### Code Style
 
-This project follows Go standard formatting and linting guidelines. Please run `gofmt` and `golint` before submitting pull requests.
+This project follows Go standard formatting and linting guidelines. Please run `gofmt` before submitting pull requests.
+
+### Project Structure
+
+```
+dbox/
+├── cli/                    # CLI command definitions
+│   ├── cli.go             # Main CLI commands (pull, run, create, etc.)
+│   ├── container_cmds.go  # Container-specific commands
+│   └── volume_cmd.go      # Volume management commands
+├── config/                # Configuration management
+├── container/             # Container lifecycle and management
+├── image/                 # Image operations
+├── logger/                # Logging utilities
+├── runtime/               # OCI runtime integration
+├── utils/                 # Utility functions
+├── volume/                # Volume management
+└── main.go               # Application entry point
+```
 
 ### Reporting Issues
 
 Please report bugs and feature requests on the [Issues](https://github.com/yourusername/dbox/issues) page.
 
+When reporting issues, please include:
+- dbox version (`dbox info`)
+- Go version
+- Runtime being used (crun/runc version)
+- Operating system and architecture
+- Full error message and steps to reproduce
+- Configuration file (if relevant)
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) file for details.
+
+## Recent Changes
+
+### Latest Features
+- **Volume Management**: Full volume lifecycle support with create, list, inspect, and remove operations
+- **JSON Output**: Added `--json` flag for structured data output in list, status, and volume commands
+- **Enhanced Volume Info**: Volume listings now include creation timestamps
+- **CLI Refactoring**: Improved code organization with separated command packages
+- **Native OverlayFS Detection**: Better filesystem compatibility with automatic fallback
+
+### Recent Improvements
+- Better error handling and null pointer safety
+- Standardized display messages across commands
+- Enhanced configuration management with example config
+- Improved build system with better cross-compilation support
 
 ## Acknowledgments
 
