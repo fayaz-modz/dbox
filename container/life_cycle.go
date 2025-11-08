@@ -672,7 +672,7 @@ func (cm *ContainerManager) RecreateWithOptions(opts *RecreateOptions) error {
 
 	// Update metadata if image changed
 	if imageName != "" {
-		metadata := map[string]string{"name": opts.Name, "image": imageName}
+		metadata := map[string]string{"name": opts.Name, "image": imageName, "status": StatusReady}
 		metadataPath := filepath.Join(containerPath, "metadata.json")
 		metadataData, _ := json.MarshalIndent(metadata, "", "  ")
 		os.WriteFile(metadataPath, metadataData, 0644)
