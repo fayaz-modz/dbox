@@ -10,6 +10,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	spec "github.com/opencontainers/runtime-spec/specs-go"
 )
 
 type Runtime struct {
@@ -18,6 +20,16 @@ type Runtime struct {
 
 func NewRuntime(cfg *Config) *Runtime {
 	return &Runtime{cfg: cfg}
+}
+
+// isTerminal checks if stdout is connected to a terminal
+func isTerminal() bool {
+	// Simple check: if we have a terminal, we should be able to get terminal info
+	fi, err := os.Stdout.Stat()
+	if err != nil {
+		return false
+	}
+	return (fi.Mode() & os.ModeCharDevice) != 0
 }
 
 func (r *Runtime) Create(containerID, bundlePath string) error {
@@ -286,13 +298,86 @@ func (r *Runtime) State(containerID string) (string, error) {
 }
 
 func (r *Runtime) Exec(containerID string, command []string) error {
+	// Check container state first
+	state, err := r.State(containerID)
+	if err != nil {
+		// If container doesn't exist in runtime, provide helpful error
+		if strings.Contains(err.Error(), "does not exist") {
+			return fmt.Errorf("container '%s' does not exist. Use 'dbox create' to create it first", containerID)
+		}
+		return fmt.Errorf("failed to get container state: %w", err)
+	}
+
+	// Check if we're in an interactive terminal to determine TTY allocation
+	isInteractive := isTerminal()
+
+	// If container is running, use normal exec
+	if state == "running" {
+		args := []string{
+			"--root", r.cfg.RunPath,
+			"exec",
+		}
+		if isInteractive {
+			args = append(args, "-t")
+		}
+		args = append(args, containerID)
+		args = append(args, command...)
+
+		cmd := exec.Command(r.cfg.Runtime, args...)
+		cmd.Stdin = os.Stdin
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+
+		return cmd.Run()
+	}
+
+	// If container is not running, start it with the custom command
+	// This is like Docker's exec behavior - it starts the container with the custom command
+	bundlePath := filepath.Join(r.cfg.ContainersPath, containerID)
+
+	// Check if container bundle exists
+	if _, err := os.Stat(bundlePath); os.IsNotExist(err) {
+		return fmt.Errorf("container '%s' does not exist", containerID)
+	}
+
+	// Read the original config to preserve all settings except init
+	configPath := filepath.Join(bundlePath, "config.json")
+	configData, err := os.ReadFile(configPath)
+	if err != nil {
+		return fmt.Errorf("failed to read container config: %w", err)
+	}
+
+	var ociSpec spec.Spec
+	if err := json.Unmarshal(configData, &ociSpec); err != nil {
+		return fmt.Errorf("failed to parse container config: %w", err)
+	}
+
+	// Override the process args with the custom command
+	if ociSpec.Process != nil {
+		ociSpec.Process.Args = command
+		// Set terminal based on whether we're interactive
+		ociSpec.Process.Terminal = isInteractive
+	}
+
+	// Write the modified config temporarily
+	tempConfigPath := filepath.Join(bundlePath, "config_exec.json")
+	modifiedData, err := json.MarshalIndent(ociSpec, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal modified config: %w", err)
+	}
+	if err := os.WriteFile(tempConfigPath, modifiedData, 0644); err != nil {
+		return fmt.Errorf("failed to write temporary config: %w", err)
+	}
+	defer os.Remove(tempConfigPath)
+
+	// Use the temporary config for running
 	args := []string{
 		"--root", r.cfg.RunPath,
-		"exec",
-		"-t",
-		containerID,
+		"run",
+		"--bundle", bundlePath,
+		"--config", tempConfigPath,
+		containerID + "_exec",
 	}
-	args = append(args, command...)
 
 	cmd := exec.Command(r.cfg.Runtime, args...)
 	cmd.Stdin = os.Stdin
