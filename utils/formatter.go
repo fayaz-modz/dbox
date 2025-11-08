@@ -81,13 +81,13 @@ func (tf *TableFormatter) Render() error {
 
 // PrintSectionHeader prints a standardized section header
 func PrintSectionHeader(title string) {
-	fmt.Printf("\n%s\n", strings.ToUpper(title))
+	fmt.Printf("%s\n", title)
 	fmt.Printf("%s\n", strings.Repeat("=", len(title)))
 }
 
 // PrintKeyValue prints a key-value pair in a consistent format
 func PrintKeyValue(key, value string) {
-	fmt.Printf("  %-20s: %s\n", key, value)
+	fmt.Printf("  %-18s : %s\n", key, value)
 }
 
 // PrintInfo prints an informational message

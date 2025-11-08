@@ -269,19 +269,12 @@ func InfoCmd() *cobra.Command {
 					return utils.PrintJSONData(containerInfo)
 				} else {
 					// Display container creation options
-					utils.PrintSectionHeader(fmt.Sprintf("Container '%s' Creation Options", containerName))
+					utils.PrintSectionHeader(fmt.Sprintf("Container '%s' Creation Options", strings.ToLower(containerName)))
 					utils.PrintKeyValue("Image", opts.Image)
 					utils.PrintKeyValue("Name", opts.Name)
 
 					if opts.ContainerConfig != "" {
 						utils.PrintKeyValue("Container Config", opts.ContainerConfig)
-					}
-
-					if len(opts.Envs) > 0 {
-						utils.PrintSectionHeader("Environment Variables")
-						for _, env := range opts.Envs {
-							fmt.Printf("    %s\n", env)
-						}
 					}
 
 					utils.PrintKeyValue("No OverlayFS", fmt.Sprintf("%t", opts.NoOverlayFS))
@@ -293,16 +286,27 @@ func InfoCmd() *cobra.Command {
 						utils.PrintKeyValue("Init Process", opts.InitProcess)
 					}
 
+					if len(opts.Envs) > 0 {
+						fmt.Println()
+						utils.PrintSectionHeader("Environment Variables")
+						for _, env := range opts.Envs {
+							fmt.Printf("    %s\n", env)
+						}
+						fmt.Println()
+					}
+
 					if len(opts.Volumes) > 0 {
 						utils.PrintSectionHeader("Volumes")
 						for _, vol := range opts.Volumes {
 							fmt.Printf("    %s\n", vol)
 						}
+						fmt.Println()
 					}
 
 					// Resource limits
 					if opts.CPUQuota != 0 || opts.CPUPeriod != 0 || opts.MemoryLimit != 0 ||
 						opts.MemorySwap != 0 || opts.CPUShares != 0 || opts.BlkioWeight != 0 {
+						fmt.Println()
 						utils.PrintSectionHeader("Resource Limits")
 						if opts.CPUQuota != 0 {
 							utils.PrintKeyValue("CPU Quota", fmt.Sprintf("%d microseconds", opts.CPUQuota))
@@ -322,6 +326,7 @@ func InfoCmd() *cobra.Command {
 						if opts.BlkioWeight != 0 {
 							utils.PrintKeyValue("Block IO Weight", fmt.Sprintf("%d", opts.BlkioWeight))
 						}
+						fmt.Println()
 					}
 
 					return nil
@@ -496,14 +501,6 @@ func StatusCmd() *cobra.Command {
 				logPath := filepath.Join(cfg.RunPath, "logs", name+".log")
 				statusData["log_file"] = logPath
 
-				if status == "RUNNING" {
-					statusData["available_commands"] = map[string]string{
-						"attach":    "dbox attach " + name,
-						"logs":      "dbox logs " + name,
-						"init_logs": "dbox exec " + name + " cat /var/log/dbox-init.log",
-					}
-				}
-
 				return utils.PrintJSONData(statusData)
 			} else {
 				// Regular text output
@@ -532,6 +529,7 @@ func StatusCmd() *cobra.Command {
 
 				// Show log location
 				logPath := filepath.Join(cfg.RunPath, "logs", name+".log")
+				fmt.Println()
 				utils.PrintSectionHeader("Log Information")
 				utils.PrintKeyValue("Log file", logPath)
 				if _, err := os.Stat(logPath); err == nil {
@@ -539,6 +537,7 @@ func StatusCmd() *cobra.Command {
 				}
 
 				if status == "RUNNING" {
+					fmt.Println()
 					utils.PrintSectionHeader("Available Commands")
 					utils.PrintInfo("To attach: dbox attach " + name)
 					utils.PrintInfo("To view logs: dbox logs " + name)
