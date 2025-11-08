@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -31,6 +32,8 @@ func main() {
 			if err != nil {
 				return fmt.Errorf("failed to load config: %w", err)
 			}
+			// Store config in command context
+			cmd.SetContext(context.WithValue(cmd.Context(), "config", cfg))
 			return nil
 		},
 	}
@@ -45,24 +48,24 @@ func main() {
 
 	// Commands
 	rootCmd.AddCommand(
-		cli.CreateCmd(cfg, configPath),
-		cli.CreateBackgroundCmd(cfg),
-		cli.ListCmd(cfg),
-		cli.StartCmd(cfg),
-		cli.StatusCmd(cfg),
-		cli.StopCmd(cfg),
-		cli.RecreateCmd(cfg),
-		cli.DeleteCmd(cfg),
-		cli.ExecCmd(cfg),
-		cli.PullCmd(cfg, configPath),
-		cli.RunCmd(cfg),
-		cli.RawCmd(cfg),
-		cli.LogsCmd(cfg),
-		cli.InfoCmd(cfg),
-		cli.CleanCmd(cfg),
-		cli.AttachCmd(cfg),
-		cli.UsageCmd(cfg),
-		cli.VolumeCmd(cfg),
+		cli.CreateCmd(configPath),
+		cli.CreateBackgroundCmd(),
+		cli.ListCmd(),
+		cli.StartCmd(),
+		cli.StatusCmd(),
+		cli.StopCmd(),
+		cli.RecreateCmd(),
+		cli.DeleteCmd(),
+		cli.ExecCmd(),
+		cli.PullCmd(configPath),
+		cli.RunCmd(),
+		cli.RawCmd(),
+		cli.LogsCmd(),
+		cli.InfoCmd(),
+		cli.CleanCmd(),
+		cli.AttachCmd(),
+		cli.UsageCmd(),
+		cli.VolumeCmd(),
 		cli.CompletionCmd(rootCmd),
 	)
 

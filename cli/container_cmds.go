@@ -14,19 +14,20 @@ import (
 	. "dbox/logger"
 )
 
-func ListCmd(cfg *Config) *cobra.Command {
+func ListCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:     "list",
 		Short:   "List all containers",
 		Aliases: []string{"ls"},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := cmd.Context().Value("config").(*Config)
 			cm := NewContainerManager(cfg)
 			return cm.List()
 		},
 	}
 }
 
-func CreateCmd(cfg *Config, configPath string) *cobra.Command {
+func CreateCmd(configPath string) *cobra.Command {
 	var (
 		image        string
 		name         string
@@ -52,8 +53,9 @@ func CreateCmd(cfg *Config, configPath string) *cobra.Command {
 		Use:   "create [flags]",
 		Short: "Create a new container",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg.DNS = dns
-			cm := NewContainerManager(cfg)
+			config := cmd.Context().Value("config").(*Config)
+			config.DNS = dns
+			cm := NewContainerManager(config)
 
 			opts := &CreateOptions{
 				Image:           image,
@@ -131,7 +133,7 @@ func CreateCmd(cfg *Config, configPath string) *cobra.Command {
 	return cmd
 }
 
-func CreateBackgroundCmd(cfg *Config) *cobra.Command {
+func CreateBackgroundCmd() *cobra.Command {
 	var (
 		name         string
 		image        string
@@ -157,6 +159,7 @@ func CreateBackgroundCmd(cfg *Config) *cobra.Command {
 		Short:  "Internal command for background container creation",
 		Hidden: true, // Hide from help
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := cmd.Context().Value("config").(*Config)
 			cm := NewContainerManager(cfg)
 
 			opts := &CreateOptions{
@@ -223,7 +226,7 @@ func CreateBackgroundCmd(cfg *Config) *cobra.Command {
 	return cmd
 }
 
-func StartCmd(cfg *Config) *cobra.Command {
+func StartCmd() *cobra.Command {
 	var detach bool
 
 	cmd := &cobra.Command{
@@ -231,6 +234,7 @@ func StartCmd(cfg *Config) *cobra.Command {
 		Short: "Start a container",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := cmd.Context().Value("config").(*Config)
 			cm := NewContainerManager(cfg)
 			return cm.Start(args[0], detach)
 		},
@@ -240,7 +244,7 @@ func StartCmd(cfg *Config) *cobra.Command {
 	return cmd
 }
 
-func StopCmd(cfg *Config) *cobra.Command {
+func StopCmd() *cobra.Command {
 	var force bool
 
 	cmd := &cobra.Command{
@@ -248,6 +252,7 @@ func StopCmd(cfg *Config) *cobra.Command {
 		Short: "Stop a container",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := cmd.Context().Value("config").(*Config)
 			cm := NewContainerManager(cfg)
 			return cm.Stop(args[0], force)
 		},
@@ -257,7 +262,7 @@ func StopCmd(cfg *Config) *cobra.Command {
 	return cmd
 }
 
-func RecreateCmd(cfg *Config) *cobra.Command {
+func RecreateCmd() *cobra.Command {
 	var (
 		image        string
 		containerCfg string
@@ -282,6 +287,7 @@ func RecreateCmd(cfg *Config) *cobra.Command {
 		Long:  "Recreates a container using original settings, with optional overrides from flags",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := cmd.Context().Value("config").(*Config)
 			cfg.DNS = dns
 			cm := NewContainerManager(cfg)
 
@@ -327,19 +333,20 @@ func RecreateCmd(cfg *Config) *cobra.Command {
 	return cmd
 }
 
-func ExecCmd(cfg *Config) *cobra.Command {
+func ExecCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "exec [container-name] [command...]",
 		Short: "Execute a command in a container",
 		Args:  cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := cmd.Context().Value("config").(*Config)
 			cm := NewContainerManager(cfg)
 			return cm.Exec(args[0], args[1:])
 		},
 	}
 }
 
-func RunCmd(cfg *Config) *cobra.Command {
+func RunCmd() *cobra.Command {
 	var (
 		image        string
 		name         string
@@ -367,6 +374,7 @@ func RunCmd(cfg *Config) *cobra.Command {
 		Short: "Run a command in a new container (similar to docker run)",
 		Long:  "Creates and starts a container in one step. By default, it runs in the foreground. Use -d to detach.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := cmd.Context().Value("config").(*Config)
 			cfg.DNS = dns
 			cm := NewContainerManager(cfg)
 
@@ -420,7 +428,7 @@ func RunCmd(cfg *Config) *cobra.Command {
 	return cmd
 }
 
-func DeleteCmd(cfg *Config) *cobra.Command {
+func DeleteCmd() *cobra.Command {
 	var force bool
 
 	cmd := &cobra.Command{
@@ -429,6 +437,7 @@ func DeleteCmd(cfg *Config) *cobra.Command {
 		Aliases: []string{"rm"},
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := cmd.Context().Value("config").(*Config)
 			cm := NewContainerManager(cfg)
 			return cm.Delete(args[0], force)
 		},

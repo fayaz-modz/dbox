@@ -7,7 +7,7 @@ import (
 	. "dbox/container"
 )
 
-func VolumeCmd(cfg *Config) *cobra.Command {
+func VolumeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "volume",
 		Short: "Manage volumes",
@@ -15,21 +15,21 @@ func VolumeCmd(cfg *Config) *cobra.Command {
 	}
 
 	cmd.AddCommand(
-		volumeListCmd(cfg),
-		volumeInspectCmd(cfg),
-		volumeCreateCmd(cfg),
-		volumeRemoveCmd(cfg),
+		volumeListCmd(),
+		volumeInspectCmd(),
+		volumeCreateCmd(),
+		volumeRemoveCmd(),
 	)
-
 	return cmd
 }
 
-func volumeListCmd(cfg *Config) *cobra.Command {
+func volumeListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "ls",
 		Short:   "List volumes",
 		Aliases: []string{"list"},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := cmd.Context().Value("config").(*Config)
 			cm := NewContainerManager(cfg)
 			return cm.ListVolumes()
 		},
@@ -38,12 +38,13 @@ func volumeListCmd(cfg *Config) *cobra.Command {
 	return cmd
 }
 
-func volumeInspectCmd(cfg *Config) *cobra.Command {
+func volumeInspectCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "inspect [volume-name]",
 		Short: "Display detailed information on one or more volumes",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := cmd.Context().Value("config").(*Config)
 			cm := NewContainerManager(cfg)
 			for _, volumeName := range args {
 				if err := cm.InspectVolume(volumeName); err != nil {
@@ -57,7 +58,7 @@ func volumeInspectCmd(cfg *Config) *cobra.Command {
 	return cmd
 }
 
-func volumeCreateCmd(cfg *Config) *cobra.Command {
+func volumeCreateCmd() *cobra.Command {
 	var (
 		driver string
 		opts   []string
@@ -68,6 +69,7 @@ func volumeCreateCmd(cfg *Config) *cobra.Command {
 		Short: "Create a volume",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := cmd.Context().Value("config").(*Config)
 			cm := NewContainerManager(cfg)
 			return cm.CreateVolume(args[0], driver, opts)
 		},
@@ -79,7 +81,7 @@ func volumeCreateCmd(cfg *Config) *cobra.Command {
 	return cmd
 }
 
-func volumeRemoveCmd(cfg *Config) *cobra.Command {
+func volumeRemoveCmd() *cobra.Command {
 	var force bool
 
 	cmd := &cobra.Command{
@@ -88,6 +90,7 @@ func volumeRemoveCmd(cfg *Config) *cobra.Command {
 		Aliases: []string{"remove"},
 		Args:    cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := cmd.Context().Value("config").(*Config)
 			cm := NewContainerManager(cfg)
 			for _, volumeName := range args {
 				if err := cm.RemoveVolume(volumeName, force); err != nil {

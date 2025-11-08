@@ -22,7 +22,7 @@ import (
 	. "dbox/runtime"
 )
 
-func PullCmd(cfg *Config, configPath string) *cobra.Command {
+func PullCmd(configPath string) *cobra.Command {
 	var dns []string
 
 	cmd := &cobra.Command{
@@ -30,6 +30,7 @@ func PullCmd(cfg *Config, configPath string) *cobra.Command {
 		Short: "Pull an image from a registry",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := cmd.Context().Value("config").(*Config)
 			cfg.DNS = dns
 			im := NewImageManager(cfg)
 			return im.Pull(args[0], nil)
@@ -72,7 +73,7 @@ func PullCmd(cfg *Config, configPath string) *cobra.Command {
 	return cmd
 }
 
-func LogsCmd(cfg *Config) *cobra.Command {
+func LogsCmd() *cobra.Command {
 	var follow bool
 
 	cmd := &cobra.Command{
@@ -80,6 +81,7 @@ func LogsCmd(cfg *Config) *cobra.Command {
 		Short: "Fetch the logs of a container",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := cmd.Context().Value("config").(*Config)
 			containerName := args[0]
 			logPath := filepath.Join(cfg.RunPath, "logs", containerName+".log")
 
@@ -154,25 +156,27 @@ func LogsCmd(cfg *Config) *cobra.Command {
 	return cmd
 }
 
-func RawCmd(cfg *Config) *cobra.Command {
+func RawCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "raw [runtime-args...]",
 		Short: "Run raw runtime commands (proxy to crun/runc)",
 		Long:  "Directly proxies commands and arguments to the underlying OCI runtime (e.g., crun). Useful for advanced debugging.",
 		Args:  cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := cmd.Context().Value("config").(*Config)
 			rt := NewRuntime(cfg)
 			return rt.RunRaw(args)
 		},
 	}
 }
 
-func InfoCmd(cfg *Config) *cobra.Command {
+func InfoCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "info [container-name]",
 		Short: "Show configuration and runtime information",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := cmd.Context().Value("config").(*Config)
 			if len(args) == 1 {
 				// Show container creation options
 				containerName := args[0]
@@ -277,6 +281,7 @@ func InfoCmd(cfg *Config) *cobra.Command {
 		if len(args) >= 1 {
 			return nil, cobra.ShellCompDirectiveNoFileComp
 		}
+		cfg := cmd.Context().Value("config").(*Config)
 		cm := NewContainerManager(cfg)
 		names, err := cm.GetContainerNames()
 		if err != nil {
@@ -288,13 +293,14 @@ func InfoCmd(cfg *Config) *cobra.Command {
 	return cmd
 }
 
-func CleanCmd(cfg *Config) *cobra.Command {
+func CleanCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "clean",
 		Short: "Delete the local image cache",
 		Long:  "Removes the entire local image cache directory, forcing images to be re-pulled on next use.",
 		Args:  cobra.ExactArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := cmd.Context().Value("config").(*Config)
 			im := NewImageManager(cfg)
 			return im.CleanCache()
 		},
@@ -302,7 +308,7 @@ func CleanCmd(cfg *Config) *cobra.Command {
 	return cmd
 }
 
-func AttachCmd(cfg *Config) *cobra.Command {
+func AttachCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "attach [container-name]",
 		Short: "Attach to a running VM container",
@@ -310,18 +316,20 @@ func AttachCmd(cfg *Config) *cobra.Command {
 This is useful for VM containers that are running in the background.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := cmd.Context().Value("config").(*Config)
 			cm := NewContainerManager(cfg)
 			return cm.Attach(args[0])
 		},
 	}
 }
 
-func StatusCmd(cfg *Config) *cobra.Command {
+func StatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status [container-name]",
 		Short: "Show detailed status of a container",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := cmd.Context().Value("config").(*Config)
 			name := args[0]
 			rt := NewRuntime(cfg)
 
@@ -400,7 +408,7 @@ func StatusCmd(cfg *Config) *cobra.Command {
 	}
 }
 
-func UsageCmd(cfg *Config) *cobra.Command {
+func UsageCmd() *cobra.Command {
 	var (
 		showPID    bool
 		showCgroup bool
@@ -411,6 +419,7 @@ func UsageCmd(cfg *Config) *cobra.Command {
 		Short: "Show CPU, memory usage and optional PID/cgroups info",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := cmd.Context().Value("config").(*Config)
 			cm := NewContainerManager(cfg)
 			return cm.Usage(args[0], showPID, showCgroup)
 		},
