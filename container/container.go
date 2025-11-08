@@ -406,7 +406,7 @@ func (cm *ContainerManager) ListWithContext(ctx interface{}) error {
 	} else {
 		tf = utils.NewTableFormatter()
 	}
-	tf.AddHeader("container_name", "IMAGE", "STATUS", "CREATED")
+	tf.AddHeader("container_name", "image", "status", "created")
 
 	for _, entry := range entries {
 		if entry.IsDir() && !strings.HasPrefix(entry.Name(), ".") {

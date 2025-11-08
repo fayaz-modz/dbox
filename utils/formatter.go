@@ -38,7 +38,12 @@ func (tf *TableFormatter) AddHeader(columns ...string) {
 	if tf.jsonMode {
 		tf.headers = columns
 	} else {
-		tf.AddRow(columns...)
+		// Convert to uppercase for table display
+		upperColumns := make([]string, len(columns))
+		for i, col := range columns {
+			upperColumns[i] = strings.ToUpper(col)
+		}
+		tf.AddRow(upperColumns...)
 	}
 }
 
