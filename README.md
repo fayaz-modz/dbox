@@ -23,6 +23,13 @@ dbox logs test                  # View logs
 dbox usage test                 # Resource monitoring
 dbox recreate test --privileged  # Fix/modify container
 
+# Image management
+dbox image ls                   # List images with usage info
+dbox image ls --json           # List images in JSON format
+dbox image rm alpine:latest    # Remove specific image
+dbox image rm image1 image2    # Remove multiple images
+dbox image rm -f image         # Force remove image in use
+
 # Volume management
 dbox volume ls                  # List volumes
 dbox volume create data         # Create volume
@@ -252,8 +259,11 @@ dbox recreate my-alpine
 dbox delete my-alpine
 dbox rm -f my-alpine  # Force delete
 
-# Clean image cache
+# Clean unused images (preserves images used by containers)
 dbox clean
+
+# Clean all images (including those in use)
+dbox clean --all
 
 # Volume management
 dbox volume ls

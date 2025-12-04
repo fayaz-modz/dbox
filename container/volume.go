@@ -17,7 +17,7 @@ func (cm *ContainerManager) ListVolumes() error {
 }
 
 // ListVolumesWithContext lists all volumes with optional context for JSON output
-func (cm *ContainerManager) ListVolumesWithContext(ctx interface{}) error {
+func (cm *ContainerManager) ListVolumesWithContext(ctx any) error {
 	volumesPath := cm.cfg.VolumesPath
 
 	if _, err := os.Stat(volumesPath); os.IsNotExist(err) {
@@ -80,7 +80,6 @@ func (cm *ContainerManager) ListVolumesWithContext(ctx interface{}) error {
 	}
 
 	return w.Render()
-	return nil
 }
 
 // InspectVolume displays detailed information about a volume
@@ -89,7 +88,7 @@ func (cm *ContainerManager) InspectVolume(volumeName string) error {
 }
 
 // InspectVolumeWithContext displays detailed information about a volume with optional context for JSON output
-func (cm *ContainerManager) InspectVolumeWithContext(volumeName string, ctx interface{}) error {
+func (cm *ContainerManager) InspectVolumeWithContext(volumeName string, ctx any) error {
 	volumePath := filepath.Join(cm.cfg.VolumesPath, volumeName)
 
 	if _, err := os.Stat(volumePath); os.IsNotExist(err) {
@@ -107,7 +106,7 @@ func (cm *ContainerManager) InspectVolumeWithContext(volumeName string, ctx inte
 		}
 		if json.Unmarshal(data, &metadata) == nil {
 			if utils.IsJSONMode(ctx) {
-				volumeInfo := map[string]interface{}{
+				volumeInfo := map[string]any{
 					"name":       metadata.Name,
 					"driver":     metadata.Driver,
 					"created_at": metadata.CreatedAt,
@@ -126,7 +125,7 @@ func (cm *ContainerManager) InspectVolumeWithContext(volumeName string, ctx inte
 		// Fallback for volumes without metadata
 		dataPath := filepath.Join(volumePath, "_data")
 		if utils.IsJSONMode(ctx) {
-			volumeInfo := map[string]interface{}{
+			volumeInfo := map[string]any{
 				"name":       volumeName,
 				"driver":     "local",
 				"mountpoint": dataPath,
@@ -168,7 +167,7 @@ func (cm *ContainerManager) CreateVolume(volumeName, driver string, opts []strin
 	}
 
 	// Create metadata
-	metadata := map[string]interface{}{
+	metadata := map[string]any{
 		"name":       volumeName,
 		"driver":     driver,
 		"created_at": time.Now().Format(time.RFC3339),

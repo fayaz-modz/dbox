@@ -75,6 +75,7 @@ func main() {
 		cli.AttachCmd(),
 		cli.UsageCmd(),
 		cli.VolumeCmd(),
+		cli.ImageCmd(),
 		cli.CompletionCmd(rootCmd),
 	)
 

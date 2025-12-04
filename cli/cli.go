@@ -392,17 +392,26 @@ func InfoCmd() *cobra.Command {
 }
 
 func CleanCmd() *cobra.Command {
+	var all bool
+
 	cmd := &cobra.Command{
 		Use:   "clean",
-		Short: "Delete the local image cache",
-		Long:  "Removes the entire local image cache directory, forcing images to be re-pulled on next use.",
+		Short: "Delete unused images from local cache",
+		Long:  "Removes unused images from the local cache. Images that are depended on by containers are preserved. Use --all to remove all images.",
 		Args:  cobra.ExactArgs(0),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := cmd.Context().Value("config").(*Config)
 			im := NewImageManager(cfg)
-			return im.CleanCache()
+
+			if all {
+				return im.CleanCache()
+			}
+			return im.CleanUnusedImages()
 		},
 	}
+
+	cmd.Flags().BoolVar(&all, "all", false, "Remove all images, including those in use")
+
 	return cmd
 }
 

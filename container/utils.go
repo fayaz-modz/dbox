@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -36,6 +37,7 @@ func copyDirWithProgress(src, dst string) error {
 	var copiedBytes int64
 	stopProgress := make(chan bool)
 	progressDone := make(chan bool)
+	firstPrinted := false
 
 	// Progress reporter goroutine
 	go func() {
@@ -46,12 +48,12 @@ func copyDirWithProgress(src, dst string) error {
 		for {
 			select {
 			case <-stopProgress:
-				printCopyProgress(totalSize, totalSize)
+				printCopyProgress(totalSize, totalSize, &firstPrinted)
 				fmt.Println()
 				return
 			case <-ticker.C:
 				currentBytes := atomic.LoadInt64(&copiedBytes)
-				printCopyProgress(currentBytes, totalSize)
+				printCopyProgress(currentBytes, totalSize, &firstPrinted)
 			}
 		}
 	}()
@@ -90,15 +92,84 @@ func copyDirWithProgress(src, dst string) error {
 	return err
 }
 
-func printCopyProgress(current, total int64) {
+// getTerminalWidth returns the width of the terminal in columns
+func getTerminalWidth() int {
+	cmd := exec.Command("stty", "size")
+	cmd.Stdin = os.Stdin
+	output, err := cmd.Output()
+	if err != nil {
+		return 80 // fallback to 80 columns
+	}
+
+	parts := strings.Split(strings.TrimSpace(string(output)), " ")
+	if len(parts) != 2 {
+		return 80
+	}
+
+	width, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 80
+	}
+
+	return width
+}
+
+func printCopyProgress(current, total int64, firstPrinted *bool) {
 	if total <= 0 {
 		return
 	}
+
 	percentage := float64(current) / float64(total) * 100
-	barWidth := 30
-	completedWidth := int(float64(barWidth) * float64(current) / float64(total))
-	bar := strings.Repeat("█", completedWidth) + strings.Repeat("░", barWidth-completedWidth)
-	fmt.Printf("\r  Copying... [%s] %.1f%% (%s / %s)", bar, percentage, utils.FormatBytes(uint64(current)), utils.FormatBytes(uint64(total)))
+
+	// Get terminal width for responsive progress bar
+	termWidth := getTerminalWidth()
+
+	// Print the first line (prefix) only once
+	if !*firstPrinted {
+		if termWidth < 50 {
+			// Small terminal - include total size in first line
+			totalStr := utils.FormatBytes(uint64(total))
+			fmt.Printf("  Copying... %s\n", totalStr)
+		} else {
+			fmt.Printf("  Copying...\n")
+		}
+		*firstPrinted = true
+	}
+
+	var progressLine string
+
+	if termWidth < 30 {
+		// Very small terminal - just show percentage
+		progressLine = fmt.Sprintf("\r%.1f%%", percentage)
+	} else if termWidth < 50 {
+		// Small terminal - show percentage bar without brackets and current size
+		currentStr := utils.FormatBytes(uint64(current))
+
+		// Calculate bar width (leave space for percentage and size info)
+		sizeInfo := fmt.Sprintf("%.1f%% (%s)", percentage, currentStr)
+		barWidth := max(termWidth-len(sizeInfo)-2, 3) // -2 for space after bar
+
+		completedWidth := int(float64(barWidth) * float64(current) / float64(total))
+		bar := strings.Repeat("█", completedWidth) + strings.Repeat("░", barWidth-completedWidth)
+
+		progressLine = fmt.Sprintf("\r%s %s", bar, sizeInfo)
+	} else {
+		// Normal terminal - show full progress bar
+		// Calculate progress bar width (leave space for percentage and size info)
+		sizeInfo := fmt.Sprintf("%.1f%% (%s / %s)",
+			percentage,
+			utils.FormatBytes(uint64(current)),
+			utils.FormatBytes(uint64(total)))
+		barWidth := max(termWidth-len(sizeInfo)-3, 5)
+
+		completedWidth := int(float64(barWidth) * float64(current) / float64(total))
+		bar := strings.Repeat("█", completedWidth) + strings.Repeat("░", barWidth-completedWidth)
+
+		progressLine = fmt.Sprintf("\r%s %s", bar, sizeInfo)
+	}
+
+	// Use carriage return to overwrite the second line only
+	fmt.Print(progressLine)
 }
 
 func copyFile(src, dst string, mode os.FileMode) error {
