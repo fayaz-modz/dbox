@@ -34,6 +34,13 @@ type ImageManager struct {
 
 // getTerminalWidth returns the width of the terminal in columns
 func getTerminalWidth() int {
+	// First try to get terminal width from environment if stdout is not a terminal
+	if !isTerminal() {
+		if width := getEnvTerminalWidth(); width > 0 {
+			return width
+		}
+	}
+
 	cmd := exec.Command("stty", "size")
 	cmd.Stdin = os.Stdin
 	output, err := cmd.Output()
@@ -52,6 +59,22 @@ func getTerminalWidth() int {
 	}
 
 	return width
+}
+
+// isTerminal checks if stdout is connected to a terminal
+func isTerminal() bool {
+	fileInfo, _ := os.Stdout.Stat()
+	return (fileInfo.Mode() & os.ModeCharDevice) != 0
+}
+
+// getEnvTerminalWidth tries to get terminal width from environment variables
+func getEnvTerminalWidth() int {
+	if cols := os.Getenv("COLUMNS"); cols != "" {
+		if width, err := strconv.Atoi(cols); err == nil {
+			return width
+		}
+	}
+	return 0
 }
 
 type progressReader struct {
@@ -86,6 +109,7 @@ func (pr *progressReader) printProgress() {
 
 	// Get terminal width for responsive progress bar
 	termWidth := getTerminalWidth()
+	isTerm := isTerminal()
 
 	// Print the first line (prefix) only once
 	if !pr.firstPrinted {
@@ -101,7 +125,13 @@ func (pr *progressReader) printProgress() {
 
 	var progressLine string
 
-	if termWidth < 30 {
+	if !isTerm {
+		// Not a terminal - use simple line-by-line progress
+		progressLine = fmt.Sprintf("Progress: %.1f%% (%s / %s)\n",
+			percentage,
+			FormatBytes(uint64(pr.current)),
+			FormatBytes(uint64(pr.total)))
+	} else if termWidth < 30 {
 		// Very small terminal - just show percentage
 		progressLine = fmt.Sprintf("\r%.1f%%", percentage)
 	} else if termWidth < 50 {
@@ -134,6 +164,9 @@ func (pr *progressReader) printProgress() {
 	// Use carriage return to overwrite the second line only
 	fmt.Print(progressLine)
 
+	// Force flush to ensure immediate display during container creation
+	os.Stdout.Sync()
+
 	// When download is complete, print a newline to move to the next line.
 	if pr.current >= pr.total {
 		fmt.Println()
@@ -144,7 +177,15 @@ func (pr *progressReader) printProgress() {
 		if !pr.firstPrinted {
 			pr.logFile.WriteString(pr.prefix + "\n")
 		}
-		pr.logFile.WriteString(progressLine[1:] + "\n") // Remove \r for log
+		// Remove \r for log and ensure newline for non-terminal mode
+		logLine := progressLine
+		if strings.HasPrefix(logLine, "\r") {
+			logLine = logLine[1:]
+		}
+		if !strings.HasSuffix(logLine, "\n") {
+			logLine += "\n"
+		}
+		pr.logFile.WriteString(logLine)
 		pr.logFile.Sync()
 	}
 }
@@ -192,16 +233,30 @@ func (pt *progressTransport) RoundTrip(req *http.Request) (*http.Response, error
 	return resp, nil
 }
 
-func (im *ImageManager) Pull(imageRef string, logFile *os.File) error {
+func (im *ImageManager) Pull(imageRef string, logFile *os.File, force bool) error {
+	LogVerbose("Resolving image reference...")
+	imageRef = im.resolveImageRef(imageRef)
+	LogVerbose("Resolved to: %s", imageRef)
+
+	// Check if image already exists
+	if !force {
+		if _, err := im.GetRootfs(imageRef); err == nil {
+			if logFile != nil {
+				fmt.Fprintf(logFile, "Image already exists: %s\n", imageRef)
+				logFile.Sync()
+			} else {
+				LogInfo("Image already exists: %s", imageRef)
+			}
+			return nil
+		}
+	}
+
 	if logFile != nil {
 		fmt.Fprintf(logFile, "Pulling image: %s\n", imageRef)
 		logFile.Sync()
 	} else {
 		LogInfo("Pulling image: %s", imageRef)
 	}
-	LogVerbose("Resolving image reference...")
-	imageRef = im.resolveImageRef(imageRef)
-	LogVerbose("Resolved to: %s", imageRef)
 
 	ref, err := name.ParseReference(imageRef)
 	if err != nil {

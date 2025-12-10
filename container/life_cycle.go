@@ -59,7 +59,7 @@ func (cm *ContainerManager) CreateContainer(opts *CreateOptions, logger *DboxLog
 	if err != nil {
 		LogVerbose("Image not found locally, pulling automatically...")
 		logger.Log("Image not found locally, pulling automatically...")
-		if err := cm.imgMgr.Pull(opts.Image, logger.LogFile); err != nil {
+		if err := cm.imgMgr.Pull(opts.Image, logger.LogFile, false); err != nil {
 			logger.Log(fmt.Sprintf("Failed to pull image: %v", err))
 			cleanup()
 			return fmt.Errorf("failed to pull image: %w", err)
@@ -610,7 +610,7 @@ func (cm *ContainerManager) RecreateWithOptions(opts *RecreateOptions) error {
 		defer logger.Close()
 
 		logger.Log(fmt.Sprintf("Pulling new image '%s' for container '%s'", imageName, opts.Name))
-		if err := cm.imgMgr.Pull(imageName, logger.LogFile); err != nil {
+		if err := cm.imgMgr.Pull(imageName, logger.LogFile, false); err != nil {
 			logger.Log(fmt.Sprintf("Failed to pull new image: %v", err))
 			return fmt.Errorf("failed to pull new image: %w", err)
 		}
@@ -744,7 +744,7 @@ func (cm *ContainerManager) Run(opts *RunOptions) error {
 		if logger != nil {
 			logFile = logger.LogFile
 		}
-		if err := cm.imgMgr.Pull(opts.Image, logFile); err != nil {
+		if err := cm.imgMgr.Pull(opts.Image, logFile, false); err != nil {
 			if logger != nil {
 				logger.Log(fmt.Sprintf("Failed to pull image: %v", err))
 			}
@@ -796,7 +796,7 @@ func (cm *ContainerManager) Run(opts *RunOptions) error {
 		if logger != nil {
 			logFile = logger.LogFile
 		}
-		if err := cm.imgMgr.Pull(opts.Image, logFile); err != nil {
+		if err := cm.imgMgr.Pull(opts.Image, logFile, false); err != nil {
 			if logger != nil {
 				logger.Log(fmt.Sprintf("Failed to pull image: %v", err))
 			}

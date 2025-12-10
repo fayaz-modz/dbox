@@ -25,6 +25,7 @@ import (
 
 func PullCmd(configPath string) *cobra.Command {
 	var dns []string
+	var force bool
 
 	cmd := &cobra.Command{
 		Use:   "pull [image]",
@@ -34,11 +35,12 @@ func PullCmd(configPath string) *cobra.Command {
 			cfg := cmd.Context().Value("config").(*Config)
 			cfg.DNS = dns
 			im := NewImageManager(cfg)
-			return im.Pull(args[0], nil)
+			return im.Pull(args[0], nil, force)
 		},
 	}
 
 	cmd.Flags().StringArrayVar(&dns, "dns", []string{}, "DNS servers to use for image pulls (e.g., --dns 1.1.1.1 --dns 8.8.8.8)")
+	cmd.Flags().BoolVar(&force, "force", false, "Force re-pulling the image even if it already exists")
 
 	cmd.ValidArgsFunction = func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		if len(args) >= 1 {
