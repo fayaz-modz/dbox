@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -78,17 +79,40 @@ func getEnvTerminalWidth() int {
 	return 0
 }
 
+type progressStatus string
+
+const (
+	StatusDownloading progressStatus = "Downloading"
+	StatusVerifying   progressStatus = "Verifying"
+	StatusExtracting  progressStatus = "Extracting"
+	StatusComplete    progressStatus = "Complete"
+)
+
 type progressReader struct {
 	io.ReadCloser
-	mu           sync.Mutex
-	current      int64
-	total        int64
-	prefix       string
-	logFile      *os.File
-	firstPrinted bool
-	lastUpdate   time.Time
-	lastBytes    int64
-	startTime    time.Time
+	mu         sync.Mutex
+	current    int64
+	total      int64
+	hash       string
+	status     progressStatus
+	logFile    *os.File
+	lastUpdate time.Time
+	lastBytes  int64
+	startTime  time.Time
+	lineNumber int
+}
+
+var (
+	progressTracker struct {
+		sync.Mutex
+		readers    []*progressReader
+		lastUpdate time.Time
+	}
+)
+
+func init() {
+	progressTracker.readers = make([]*progressReader, 0)
+	progressTracker.lastUpdate = time.Time{}
 }
 
 // Read overrides the underlying Read method to update and print progress.
@@ -128,109 +152,262 @@ func (pr *progressReader) printProgress() {
 	termWidth := getTerminalWidth()
 	isTerm := isTerminal()
 
-	// Print the first line (prefix) only once
-	if !pr.firstPrinted {
-		if termWidth < 50 {
-			// Small terminal - include total size in first line
-			totalStr := FormatBytes(uint64(pr.total))
-			fmt.Printf("%s %s\n", pr.prefix, totalStr)
-		} else {
-			fmt.Printf("%s\n", pr.prefix)
-		}
-		pr.firstPrinted = true
+	// Update status based on progress
+	if pr.current >= pr.total {
+		pr.status = StatusComplete
 	}
+
+	// Format: hash: [Status] [progress bar] size/total
+	hash := pr.hash
+	if len(hash) > 12 {
+		hash = hash[:12]
+	}
+
+	currentStr := FormatBytes(uint64(pr.current))
+	totalStr := FormatBytes(uint64(pr.total))
 
 	var progressLine string
 
 	if !isTerm {
 		// Not a terminal - use simple line-by-line progress
-		progressLine = fmt.Sprintf("Progress: %.1f%% (%s / %s)\n",
-			percentage,
-			FormatBytes(uint64(pr.current)),
-			FormatBytes(uint64(pr.total)))
+		progressLine = fmt.Sprintf("%s: [%s] %.1f%% (%s / %s)\n",
+			hash, pr.status, percentage, currentStr, totalStr)
 	} else if termWidth < 30 {
-		// Very small terminal - just show percentage
-		progressLine = fmt.Sprintf("\r%.1f%%", percentage)
+		// Very small terminal - just show hash and size
+		progressLine = fmt.Sprintf("\r%s: %s/%s", hash, currentStr, totalStr)
 	} else if termWidth < 50 {
-		// Small terminal - show percentage bar without brackets and current size
-		currentStr := FormatBytes(uint64(pr.current))
+		// Small terminal - show progress bar without status
+		sizeInfo := fmt.Sprintf("%s/%s", currentStr, totalStr)
 
-		// Calculate bar width (leave space for percentage and size info)
-		sizeInfo := fmt.Sprintf("%.1f%% (%s)", percentage, currentStr)
-		barWidth := max(termWidth-len(sizeInfo)-2, 3) // -2 for space after bar
+		// Calculate bar width (leave space for hash and size info)
+		prefixLen := len(hash) + 2                              // hash + ": "
+		barWidth := max(termWidth-prefixLen-len(sizeInfo)-1, 0) // -1 for space
 
-		completedWidth := int(float64(barWidth) * (float64(pr.current) / float64(pr.total)))
-		bar := strings.Repeat("█", completedWidth) + strings.Repeat("░", barWidth-completedWidth)
-
-		progressLine = fmt.Sprintf("\r%s %s", bar, sizeInfo)
+		var bar string
+		if barWidth > 0 {
+			completedWidth := int(float64(barWidth) * (float64(pr.current) / float64(pr.total)))
+			bar = strings.Repeat("█", completedWidth) + strings.Repeat("░", barWidth-completedWidth)
+			progressLine = fmt.Sprintf("\r%s: %s %s", hash, bar, sizeInfo)
+		} else {
+			progressLine = fmt.Sprintf("\r%s: %s", hash, sizeInfo)
+		}
 	} else {
-		// Normal terminal - show full progress bar
-		// Calculate progress bar width (leave space for percentage and size info)
-		sizeInfo := fmt.Sprintf("%.1f%% (%s / %s)",
-			percentage,
-			FormatBytes(uint64(pr.current)),
-			FormatBytes(uint64(pr.total)))
-		barWidth := max(termWidth-len(sizeInfo)-3, 5)
+		// Normal terminal - show full format
+		statusInfo := fmt.Sprintf("[%s]", pr.status)
+		sizeInfo := fmt.Sprintf("%s/%s", currentStr, totalStr)
 
-		completedWidth := int(float64(barWidth) * (float64(pr.current) / float64(pr.total)))
-		bar := strings.Repeat("█", completedWidth) + strings.Repeat("░", barWidth-completedWidth)
+		// Calculate bar width
+		prefixLen := len(hash) + 2                                        // hash + ": "
+		statusLen := len(statusInfo) + 1                                  // status + space
+		barWidth := max(termWidth-prefixLen-statusLen-len(sizeInfo)-1, 0) // -1 for space
 
-		progressLine = fmt.Sprintf("\r%s %s", bar, sizeInfo)
+		var bar string
+		if barWidth > 0 {
+			completedWidth := int(float64(barWidth) * (float64(pr.current) / float64(pr.total)))
+			bar = strings.Repeat("█", completedWidth) + strings.Repeat("░", barWidth-completedWidth)
+			progressLine = fmt.Sprintf("\r%s: %s %s %s", hash, statusInfo, bar, sizeInfo)
+		} else {
+			progressLine = fmt.Sprintf("\r%s: %s %s", hash, statusInfo, sizeInfo)
+		}
 	}
 
-	// Use carriage return to overwrite the second line only
-	fmt.Print(progressLine)
+	// Simple approach: print progress on its own line without overwriting
+	progressTracker.Lock()
+	defer progressTracker.Unlock()
+
+	// Rate limit progress updates to avoid bottlenecking downloads
+	now := time.Now()
+	if now.Sub(progressTracker.lastUpdate) < 100*time.Millisecond && pr.current < pr.total {
+		return // Skip this update to avoid too frequent redraws
+	}
+	progressTracker.lastUpdate = now
+
+	// Find if this reader already exists and track if this is first time
+	found := false
+	isFirstTime := true
+	for i, reader := range progressTracker.readers {
+		if reader.hash == pr.hash {
+			if reader.current > 0 {
+				isFirstTime = false // Not first time if we had progress before
+			}
+			progressTracker.readers[i] = pr // Update existing
+			found = true
+			break
+		}
+	}
+
+	// Add new reader if not found
+	if !found {
+		progressTracker.readers = append(progressTracker.readers, pr)
+	}
+
+	// Only print if it's the first time or significant progress
+	if isFirstTime || pr.current >= pr.total {
+		displayHash := pr.hash
+		if len(displayHash) > 12 {
+			displayHash = displayHash[:12]
+		}
+
+		currentStr := FormatBytes(uint64(pr.current))
+		totalStr := FormatBytes(uint64(pr.total))
+
+		var line string
+		if termWidth < 30 {
+			line = fmt.Sprintf("%s: %s/%s", displayHash, currentStr, totalStr)
+		} else if termWidth < 50 {
+			sizeInfo := fmt.Sprintf("%s/%s", currentStr, totalStr)
+			prefixLen := len(displayHash) + 2
+			barWidth := max(termWidth-prefixLen-len(sizeInfo)-1, 0)
+
+			if barWidth > 0 {
+				completedWidth := int(float64(barWidth) * (float64(pr.current) / float64(pr.total)))
+				bar := strings.Repeat("█", completedWidth) + strings.Repeat("░", barWidth-completedWidth)
+				line = fmt.Sprintf("%s: %s %s", displayHash, bar, sizeInfo)
+			} else {
+				line = fmt.Sprintf("%s: %s", displayHash, sizeInfo)
+			}
+		} else {
+			statusInfo := fmt.Sprintf("[%s]", pr.status)
+			sizeInfo := fmt.Sprintf("%s/%s", currentStr, totalStr)
+			prefixLen := len(displayHash) + 2
+			statusLen := len(statusInfo) + 1
+			barWidth := max(termWidth-prefixLen-statusLen-len(sizeInfo)-1, 0)
+
+			if barWidth > 0 {
+				completedWidth := int(float64(barWidth) * (float64(pr.current) / float64(pr.total)))
+				bar := strings.Repeat("█", completedWidth) + strings.Repeat("░", barWidth-completedWidth)
+				line = fmt.Sprintf("%s: %s %s %s", displayHash, statusInfo, bar, sizeInfo)
+			} else {
+				line = fmt.Sprintf("%s: %s %s", displayHash, statusInfo, sizeInfo)
+			}
+		}
+
+		// Print with newline - each layer gets its own line
+		fmt.Println(line)
+	}
+
+	// Build all progress lines in order
+	var lines []string
+	for _, reader := range progressTracker.readers {
+		displayHash := reader.hash
+		if len(displayHash) > 12 {
+			displayHash = displayHash[:12]
+		}
+
+		currentStr := FormatBytes(uint64(reader.current))
+		totalStr := FormatBytes(uint64(reader.total))
+
+		if termWidth < 30 {
+			line := fmt.Sprintf("%s: %s/%s", displayHash, currentStr, totalStr)
+			lines = append(lines, line)
+		} else if termWidth < 50 {
+			sizeInfo := fmt.Sprintf("%s/%s", currentStr, totalStr)
+			prefixLen := len(displayHash) + 2
+			barWidth := max(termWidth-prefixLen-len(sizeInfo)-1, 0)
+
+			if barWidth > 0 {
+				completedWidth := int(float64(barWidth) * (float64(reader.current) / float64(reader.total)))
+				bar := strings.Repeat("█", completedWidth) + strings.Repeat("░", barWidth-completedWidth)
+				line := fmt.Sprintf("%s: %s %s", displayHash, bar, sizeInfo)
+				lines = append(lines, line)
+			} else {
+				line := fmt.Sprintf("%s: %s", displayHash, sizeInfo)
+				lines = append(lines, line)
+			}
+		} else {
+			statusInfo := fmt.Sprintf("[%s]", reader.status)
+			sizeInfo := fmt.Sprintf("%s/%s", currentStr, totalStr)
+			prefixLen := len(displayHash) + 2
+			statusLen := len(statusInfo) + 1
+			barWidth := max(termWidth-prefixLen-statusLen-len(sizeInfo)-1, 0)
+
+			if barWidth > 0 {
+				completedWidth := int(float64(barWidth) * (float64(reader.current) / float64(reader.total)))
+				bar := strings.Repeat("█", completedWidth) + strings.Repeat("░", barWidth-completedWidth)
+				line := fmt.Sprintf("%s: %s %s %s", displayHash, statusInfo, bar, sizeInfo)
+				lines = append(lines, line)
+			} else {
+				line := fmt.Sprintf("%s: %s %s", displayHash, statusInfo, sizeInfo)
+				lines = append(lines, line)
+			}
+		}
+	}
+
+	// Display progress
+	if isTerm && len(lines) > 0 {
+		// Move cursor up to overwrite previous lines (only if we have existing lines)
+		for i := 0; i < len(progressTracker.readers); i++ {
+			fmt.Print("\033[A") // Move up one line
+		}
+		fmt.Print("\r") // Move to beginning
+
+		// Print all lines
+		for _, line := range lines {
+			fmt.Print("\033[K") // Clear line
+			fmt.Println(line)
+		}
+	} else {
+		// Non-terminal fallback
+		if !strings.HasSuffix(progressLine, "\n") {
+			progressLine += "\n"
+		}
+		fmt.Print(progressLine)
+	}
 
 	// Only force flush on completion or when not a terminal
 	if pr.current >= pr.total || !isTerm {
 		os.Stdout.Sync()
 	}
 
-	// When download is complete, print a newline to move to the next line.
+	// When download is complete, calculate and display speed
 	if pr.current >= pr.total {
-		// Calculate and display average download speed
 		totalTime := time.Since(pr.startTime).Seconds()
 		if totalTime > 0 {
-			// Calculate speed in MB/s (not Mbps)
 			avgSpeedMBps := (float64(pr.total) / totalTime) / (1024 * 1024)
 			LogVerbose("Download completed: %s in %.1fs (%.2f MB/s average)",
 				FormatBytes(uint64(pr.total)), totalTime, avgSpeedMBps)
 		}
-		fmt.Println()
+
 	}
 
-	// Also write progress to log file (batch writes, only sync on completion)
-	if pr.logFile != nil {
-		if !pr.firstPrinted {
-			pr.logFile.WriteString(pr.prefix + "\n")
+	// When download is complete, calculate and display speed
+	if pr.current >= pr.total {
+		totalTime := time.Since(pr.startTime).Seconds()
+		if totalTime > 0 {
+			avgSpeedMBps := (float64(pr.total) / totalTime) / (1024 * 1024)
+			LogVerbose("Download completed: %s in %.1fs (%.2f MB/s average)",
+				FormatBytes(uint64(pr.total)), totalTime, avgSpeedMBps)
 		}
-		// Remove \r for log and ensure newline for non-terminal mode
+
+		// Remove from tracker after a delay
+		go func() {
+			time.Sleep(2 * time.Second)
+			progressTracker.Lock()
+			for i, reader := range progressTracker.readers {
+				if reader.hash == pr.hash {
+					// Remove from slice
+					progressTracker.readers = append(progressTracker.readers[:i], progressTracker.readers[i+1:]...)
+					break
+				}
+			}
+			progressTracker.Unlock()
+		}()
+	}
+
+	// Write to log file
+	if pr.logFile != nil {
 		logLine := progressLine
-		strings.TrimPrefix(logLine, "\r")
+		if strings.HasPrefix(logLine, "\r") {
+			logLine = logLine[1:] // Remove \r
+		}
 		if !strings.HasSuffix(logLine, "\n") {
 			logLine += "\n"
 		}
 		pr.logFile.WriteString(logLine)
 
-		// Only sync log file on completion to reduce I/O overhead
 		if pr.current >= pr.total {
 			pr.logFile.Sync()
 		}
-	}
-
-	// Also write progress to log file (with newline for log readability)
-	if pr.logFile != nil {
-		if !pr.firstPrinted {
-			pr.logFile.WriteString(pr.prefix + "\n")
-		}
-		// Remove \r for log and ensure newline for non-terminal mode
-		logLine := progressLine
-		strings.TrimPrefix(logLine, "\r")
-		if !strings.HasSuffix(logLine, "\n") {
-			logLine += "\n"
-		}
-		pr.logFile.WriteString(logLine)
-		pr.logFile.Sync()
 	}
 }
 
@@ -254,22 +431,33 @@ func (pt *progressTransport) RoundTrip(req *http.Request) (*http.Response, error
 	// We only want to show progress for layer downloads (blobs).
 	// A simple heuristic is to check if the URL path contains "/blobs/".
 	if resp.ContentLength > 0 && strings.Contains(req.URL.Path, "/blobs/") {
-		// Get a friendly prefix for the progress bar, e.g., "Downloading sha256:123ab..."
-		digest := filepath.Base(req.URL.Path)
-		var prefix string
+		// Extract the digest from the URL path or create a unique identifier
+		var digest string
 
-		// Safely slice the digest string to prevent panics on short names.
-		if len(digest) > 15 {
-			prefix = fmt.Sprintf("  Downloading %s...", digest[:15])
-		} else {
-			prefix = fmt.Sprintf("  Downloading %s...", digest)
+		// Try to extract digest from URL path
+		pathParts := strings.Split(req.URL.Path, "/")
+
+		// Find the digest part (last part that contains a colon like sha256:abc123)
+		for i := len(pathParts) - 1; i >= 0; i-- {
+			if strings.Contains(pathParts[i], ":") && !strings.HasPrefix(pathParts[i], "data:") {
+				digest = pathParts[i]
+				break
+			}
+		}
+
+		// If no digest found, create a unique identifier based on URL and content length
+		if digest == "" {
+			// Use a hash of the URL path and content length for uniqueness
+			urlHash := fmt.Sprintf("%x", md5.Sum([]byte(req.URL.Path+fmt.Sprintf("%d", resp.ContentLength))))
+			digest = urlHash[:8]
 		}
 
 		// Replace the original response body with our progress-tracking one.
 		resp.Body = &progressReader{
 			ReadCloser: resp.Body,
 			total:      resp.ContentLength,
-			prefix:     prefix,
+			hash:       digest,
+			status:     StatusDownloading,
 			logFile:    pt.logFile,
 			lastUpdate: time.Now(),
 			startTime:  time.Now(),
@@ -476,7 +664,6 @@ func (im *ImageManager) exportImage(img v1.Image, destPath string) error {
 			sem <- struct{}{}        // Acquire
 			defer func() { <-sem }() // Release
 
-			LogInfo("Extracting layer %d/%d...", idx+1, len(layers))
 			if err := im.extractLayer(l, rootfsPath); err != nil {
 				errMu.Lock()
 				if extractErr == nil {
