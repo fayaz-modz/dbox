@@ -48,12 +48,14 @@ func copyDirWithProgress(src, dst string) error {
 		for {
 			select {
 			case <-stopProgress:
-				printCopyProgress(totalSize, totalSize, &firstPrinted)
+				termWidth := getTerminalWidth() // Check terminal size every time
+				printCopyProgress(totalSize, totalSize, &firstPrinted, termWidth)
 				fmt.Println()
 				return
 			case <-ticker.C:
 				currentBytes := atomic.LoadInt64(&copiedBytes)
-				printCopyProgress(currentBytes, totalSize, &firstPrinted)
+				termWidth := getTerminalWidth() // Check terminal size every time
+				printCopyProgress(currentBytes, totalSize, &firstPrinted, termWidth)
 			}
 		}
 	}()
@@ -114,15 +116,12 @@ func getTerminalWidth() int {
 	return width
 }
 
-func printCopyProgress(current, total int64, firstPrinted *bool) {
+func printCopyProgress(current, total int64, firstPrinted *bool, termWidth int) {
 	if total <= 0 {
 		return
 	}
 
 	percentage := float64(current) / float64(total) * 100
-
-	// Get terminal width for responsive progress bar
-	termWidth := getTerminalWidth()
 
 	// Print the first line (prefix) only once
 	if !*firstPrinted {
@@ -170,6 +169,11 @@ func printCopyProgress(current, total int64, firstPrinted *bool) {
 
 	// Use carriage return to overwrite the second line only
 	fmt.Print(progressLine)
+
+	// Only force flush on completion
+	if current >= total {
+		os.Stdout.Sync()
+	}
 }
 
 func copyFile(src, dst string, mode os.FileMode) error {

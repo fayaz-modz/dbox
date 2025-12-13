@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -85,6 +86,9 @@ type progressReader struct {
 	prefix       string
 	logFile      *os.File
 	firstPrinted bool
+	lastUpdate   time.Time
+	lastBytes    int64
+	startTime    time.Time
 }
 
 // Read overrides the underlying Read method to update and print progress.
@@ -93,7 +97,20 @@ func (pr *progressReader) Read(p []byte) (n int, err error) {
 
 	pr.mu.Lock()
 	pr.current += int64(n)
-	pr.printProgress()
+
+	// Rate-limit progress updates: only update every 100ms or every 1MB
+	now := time.Now()
+	bytesSinceUpdate := pr.current - pr.lastBytes
+	shouldUpdate := now.Sub(pr.lastUpdate) >= 100*time.Millisecond ||
+		bytesSinceUpdate >= 1024*1024 ||
+		pr.current >= pr.total
+
+	if shouldUpdate {
+		pr.printProgress()
+		pr.lastUpdate = now
+		pr.lastBytes = pr.current
+	}
+
 	pr.mu.Unlock()
 
 	return
@@ -107,7 +124,7 @@ func (pr *progressReader) printProgress() {
 
 	percentage := float64(pr.current) / float64(pr.total) * 100
 
-	// Get terminal width for responsive progress bar
+	// Get terminal width for responsive progress bar (check every time)
 	termWidth := getTerminalWidth()
 	isTerm := isTerminal()
 
@@ -164,12 +181,41 @@ func (pr *progressReader) printProgress() {
 	// Use carriage return to overwrite the second line only
 	fmt.Print(progressLine)
 
-	// Force flush to ensure immediate display during container creation
-	os.Stdout.Sync()
+	// Only force flush on completion or when not a terminal
+	if pr.current >= pr.total || !isTerm {
+		os.Stdout.Sync()
+	}
 
 	// When download is complete, print a newline to move to the next line.
 	if pr.current >= pr.total {
+		// Calculate and display average download speed
+		totalTime := time.Since(pr.startTime).Seconds()
+		if totalTime > 0 {
+			// Calculate speed in MB/s (not Mbps)
+			avgSpeedMBps := (float64(pr.total) / totalTime) / (1024 * 1024)
+			LogVerbose("Download completed: %s in %.1fs (%.2f MB/s average)",
+				FormatBytes(uint64(pr.total)), totalTime, avgSpeedMBps)
+		}
 		fmt.Println()
+	}
+
+	// Also write progress to log file (batch writes, only sync on completion)
+	if pr.logFile != nil {
+		if !pr.firstPrinted {
+			pr.logFile.WriteString(pr.prefix + "\n")
+		}
+		// Remove \r for log and ensure newline for non-terminal mode
+		logLine := progressLine
+		strings.TrimPrefix(logLine, "\r")
+		if !strings.HasSuffix(logLine, "\n") {
+			logLine += "\n"
+		}
+		pr.logFile.WriteString(logLine)
+
+		// Only sync log file on completion to reduce I/O overhead
+		if pr.current >= pr.total {
+			pr.logFile.Sync()
+		}
 	}
 
 	// Also write progress to log file (with newline for log readability)
@@ -179,9 +225,7 @@ func (pr *progressReader) printProgress() {
 		}
 		// Remove \r for log and ensure newline for non-terminal mode
 		logLine := progressLine
-		if strings.HasPrefix(logLine, "\r") {
-			logLine = logLine[1:]
-		}
+		strings.TrimPrefix(logLine, "\r")
 		if !strings.HasSuffix(logLine, "\n") {
 			logLine += "\n"
 		}
@@ -227,6 +271,8 @@ func (pt *progressTransport) RoundTrip(req *http.Request) (*http.Response, error
 			total:      resp.ContentLength,
 			prefix:     prefix,
 			logFile:    pt.logFile,
+			lastUpdate: time.Now(),
+			startTime:  time.Now(),
 		}
 	}
 
@@ -268,6 +314,15 @@ func (im *ImageManager) Pull(imageRef string, logFile *os.File, force bool) erro
 	dialer := &net.Dialer{
 		Timeout:   30 * time.Second,
 		KeepAlive: 30 * time.Second,
+		Control: func(network, address string, c syscall.RawConn) error {
+			return c.Control(func(fd uintptr) {
+				// Set TCP_NODELAY to disable Nagle's algorithm for better latency
+				syscall.SetsockoptInt(int(fd), syscall.IPPROTO_TCP, syscall.TCP_NODELAY, 1)
+				// Set socket buffer sizes for better throughput
+				syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_RCVBUF, 1024*1024) // 1MB receive buffer
+				syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_SNDBUF, 1024*1024) // 1MB send buffer
+			})
+		},
 	}
 
 	// Set custom DNS resolver if specified
@@ -284,11 +339,20 @@ func (im *ImageManager) Pull(imageRef string, logFile *os.File, force bool) erro
 	}
 
 	transport := &http.Transport{
-		DialContext:         dialer.DialContext,
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 10,
-		IdleConnTimeout:     90 * time.Second,
-		TLSHandshakeTimeout: 10 * time.Second,
+		DialContext:           dialer.DialContext,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   20, // Increased for better connection reuse
+		MaxConnsPerHost:       20, // Limit concurrent connections per host
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		DisableCompression:    false, // Enable compression for faster transfers
+		ForceAttemptHTTP2:     true,  // Force HTTP/2 for better multiplexing
+		// Additional optimizations for Docker Hub
+		ProxyConnectHeader: map[string][]string{
+			"User-Agent": {"dbox/1.0"},
+		},
 	}
 
 	customTransport := &progressTransport{
@@ -308,11 +372,13 @@ func (im *ImageManager) Pull(imageRef string, logFile *os.File, force bool) erro
 	LogVerbose("Requesting image for platform: %s/%s", platform.OS, platform.Architecture)
 
 	// Pull the image using our custom transport.
+	LogVerbose("Starting image download with optimized transport...")
+	LogVerbose("Using %d concurrent download jobs", max(runtime.NumCPU()*2, 4))
 	img, err := remote.Image(ref,
 		remote.WithAuthFromKeychain(authn.DefaultKeychain),
 		remote.WithTransport(customTransport), // <-- USE OUR TRANSPORT HERE
 		remote.WithPlatform(platform),
-		remote.WithJobs(runtime.NumCPU()*2), // Increase concurrent downloads
+		remote.WithJobs(max(runtime.NumCPU()*4, 8)), // Increase concurrent downloads further
 	)
 	if err != nil {
 		return fmt.Errorf("failed to pull image: %w", err)
@@ -342,7 +408,7 @@ func (im *ImageManager) Pull(imageRef string, logFile *os.File, force bool) erro
 func (im *ImageManager) resolveImageRef(ref string) string {
 	// Check if it's a short name
 	if !strings.Contains(ref, "/") || strings.HasPrefix(ref, "localhost/") {
-		// Try to resolve from configured registries
+		// Try to resolve from configured registries first
 		parts := strings.SplitN(ref, ":", 2)
 		distro := parts[0]
 		tag := "latest"
@@ -353,13 +419,15 @@ func (im *ImageManager) resolveImageRef(ref string) string {
 		if fullRef, ok := im.cfg.Registries[distro]; ok {
 			return fullRef + ":" + tag
 		}
+
+		// Use standard Docker Hub for all images
+
+		// Default to docker.io library
+		return "docker.io/library/" + ref + ":" + tag
 	}
 
 	// Add default registry if no registry specified
 	if !strings.Contains(ref, ".") && !strings.HasPrefix(ref, "localhost") {
-		if !strings.Contains(ref, "/") {
-			return "docker.io/library/" + ref
-		}
 		return "docker.io/" + ref
 	}
 
@@ -382,19 +450,47 @@ func (im *ImageManager) exportImage(img v1.Image, destPath string) error {
 
 	LogInfo("Found %d layers to extract", len(layers))
 
-	// Create rootfs directory
+	// Create rootfs directory with proper permissions
 	rootfsPath := filepath.Join(destPath, "rootfs")
 	if err := os.MkdirAll(rootfsPath, 0755); err != nil {
 		return err
 	}
+	// Ensure we have write permissions
+	if err := os.Chmod(rootfsPath, 0755); err != nil {
+		LogVerbose("Warning: could not set permissions on %s: %v", rootfsPath, err)
+	}
 
-	// Extract each layer
-	LogInfo("Extracting %d layers...", len(layers))
+	// Extract layers in parallel for better performance
+	LogInfo("Extracting %d layers in parallel...", len(layers))
+
+	// Use a semaphore to limit concurrent extractions
+	sem := make(chan struct{}, runtime.NumCPU())
+	var wg sync.WaitGroup
+	var extractErr error
+	var errMu sync.Mutex
+
 	for i, layer := range layers {
-		LogInfo("Extracting layer %d/%d...", i+1, len(layers))
-		if err := im.extractLayer(layer, rootfsPath); err != nil {
-			return fmt.Errorf("failed to extract layer %d: %w", i, err)
-		}
+		wg.Add(1)
+		go func(idx int, l v1.Layer) {
+			defer wg.Done()
+			sem <- struct{}{}        // Acquire
+			defer func() { <-sem }() // Release
+
+			LogInfo("Extracting layer %d/%d...", idx+1, len(layers))
+			if err := im.extractLayer(l, rootfsPath); err != nil {
+				errMu.Lock()
+				if extractErr == nil {
+					extractErr = fmt.Errorf("failed to extract layer %d: %w", idx, err)
+				}
+				errMu.Unlock()
+			}
+		}(i, layer)
+	}
+
+	wg.Wait()
+
+	if extractErr != nil {
+		return extractErr
 	}
 
 	// Save image config

@@ -19,6 +19,7 @@ import (
 	. "dbox/config"
 	. "dbox/container"
 	. "dbox/image"
+	"dbox/logger"
 	. "dbox/runtime"
 	"dbox/utils"
 )
@@ -34,6 +35,11 @@ func PullCmd(configPath string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := cmd.Context().Value("config").(*Config)
 			cfg.DNS = dns
+
+			// Set verbose flag for logger
+			verbose := cmd.Context().Value("verbose").(bool)
+			logger.Verbose = verbose
+
 			im := NewImageManager(cfg)
 			return im.Pull(args[0], nil, force)
 		},
