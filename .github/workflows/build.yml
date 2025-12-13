@@ -28,8 +28,12 @@ jobs:
           unzip -q android-ndk-r25c-linux.zip -d $HOME/Android/Sdk/ndk
           mv $HOME/Android/Sdk/ndk/android-ndk-r25c $HOME/Android/Sdk/ndk/25.1.8937393
 
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
       - name: Build all targets
-        run: make all
+        run: VERSION=${{ steps.version.outputs.version }} make all
 
       - name: Upload binaries
         uses: actions/upload-artifact@v4

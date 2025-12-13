@@ -29,14 +29,42 @@ jobs:
           mv $HOME/Android/Sdk/ndk/android-ndk-r25c $HOME/Android/Sdk/ndk/25.1.8937393
 
       - name: Build all targets
-        run: make all
+        run: VERSION=dev make all
 
-      - name: Create/Update Development Release
+      - name: Delete existing development release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            try {
+              const release = await github.rest.repos.getReleaseByTag({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                tag: 'development'
+              });
+              await github.rest.repos.deleteRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: release.data.id
+              });
+            } catch (error) {
+              // Release doesn't exist, continue
+            }
+            try {
+              await github.rest.git.deleteRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: 'tags/development'
+              });
+            } catch (error) {
+              // Tag doesn't exist, continue
+            }
+
+      - name: Create Development Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: development
           name: Development Build
-          body: "Automated development build artifacts"
+          body: "Automated development build artifacts from commit ${{ github.sha }}"
           files: bin/*
           draft: false
           prerelease: true
