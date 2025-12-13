@@ -4,11 +4,10 @@ containers_path: /var/lib/dbox/containers
 volumes_path: /var/lib/dbox/volumes
 
 # Optional custom registries
+# Map registry names to their URLs (for private registries)
 registries:
-    alpine: docker.io/library/alpine
-    ubuntu: docker.io/library/ubuntu
-    debian: docker.io/library/debian
-    archlinux: docker.io/library/archlinux
-    fedora: docker.io/library/fedora
-    kali: docker.io/kalilinux/kali-rolling
+    # Example for a private registry
+    # myregistry: registry.example.com:5000
+    ghcr: ghcr.io
+    # quay: quay.io
 

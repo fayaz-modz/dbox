@@ -594,32 +594,31 @@ func (im *ImageManager) Pull(imageRef string, logFile *os.File, force bool) erro
 }
 
 func (im *ImageManager) resolveImageRef(ref string) string {
-	// Check if it's a short name
-	if !strings.Contains(ref, "/") || strings.HasPrefix(ref, "localhost/") {
-		// Try to resolve from configured registries first
-		parts := strings.SplitN(ref, ":", 2)
-		distro := parts[0]
-		tag := "latest"
-		if len(parts) == 2 {
-			tag = parts[1]
-		}
-
-		if fullRef, ok := im.cfg.Registries[distro]; ok {
-			return fullRef + ":" + tag
-		}
-
-		// Use standard Docker Hub for all images
-
-		// Default to docker.io library
-		return "docker.io/library/" + ref + ":" + tag
+	// If reference already contains a registry (has dots or is localhost), return as-is
+	if strings.Contains(ref, "/") && (strings.Contains(ref, ".") || strings.HasPrefix(ref, "localhost/")) {
+		return ref
 	}
 
-	// Add default registry if no registry specified
-	if !strings.Contains(ref, ".") && !strings.HasPrefix(ref, "localhost") {
-		return "docker.io/" + ref
+	// Check if this is a custom registry prefix (e.g., "myregistry/nginx:latest")
+	parts := strings.SplitN(ref, "/", 2)
+	if len(parts) == 2 {
+		registryPrefix := parts[0]
+		imagePath := parts[1]
+
+		if registryURL, ok := im.cfg.Registries[registryPrefix]; ok {
+			return registryURL + "/" + imagePath
+		}
 	}
 
-	return ref
+	// Default to docker.io library for short names (e.g., "nginx:latest")
+	parts = strings.SplitN(ref, ":", 2)
+	imageName := parts[0]
+	tag := "latest"
+	if len(parts) == 2 {
+		tag = parts[1]
+	}
+
+	return "docker.io/library/" + imageName + ":" + tag
 }
 
 func (im *ImageManager) getImagePath(imageRef string) string {

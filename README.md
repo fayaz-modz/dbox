@@ -91,6 +91,10 @@ runtime: /usr/bin/crun
 runpath: /var/run/dbox
 containers_path: /var/lib/dbox/containers
 volumes_path: /var/lib/dbox/volumes
+
+# Optional: Custom registries
+# registries:
+#   myregistry: registry.example.com:5000
 EOF
 
 # Log out and log back in for group changes to take effect
@@ -109,13 +113,12 @@ containers_path: /var/lib/dbox/containers
 volumes_path: /var/lib/dbox/volumes
 
 # Optional: Custom registries
+# Map registry prefixes to their URLs (for private registries)
 registries:
-  alpine: docker.io/library/alpine
-  ubuntu: docker.io/library/ubuntu
-  archlinux: docker.io/library/archlinux
-  fedora: docker.io/library/fedora
-  kali: docker.io/kalilinux/kali-rolling
-  debian: docker.io/library/debian
+  # Example for a private registry
+  # myregistry: registry.example.com:5000
+  # ghcr: ghcr.io
+  # quay: quay.io
 ```
 
 ## Usage
@@ -151,10 +154,15 @@ dbox logs -f my-container               # Follow logs
 dbox pull alpine:latest
 dbox pull ubuntu:22.04
 
+# Pull from custom registries (if configured)
+dbox pull myregistry/nginx:latest      # Uses registry.example.com:5000/nginx:latest
+dbox pull ghcr/myuser/myapp:latest     # Uses ghcr.io/myuser/myapp:latest
+
 # List and manage images
 dbox image ls                          # List images with usage info
 dbox image ls --json                  # List images in JSON format
 dbox image rm alpine:latest           # Remove specific image
+dbox image rm nginx:latest --force     # Force remove (even if in use)
 dbox clean                            # Clean unused images
 dbox clean --all                      # Clean all images
 ```
