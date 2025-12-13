@@ -1,9 +1,14 @@
 runtime: /usr/bin/crun
-runpath: /home/fayaz/projects/dbox/run
-containers_path: /home/fayaz/projects/dbox/containers
+runpath: /var/run/dbox
+containers_path: /var/lib/dbox/containers
+volumes_path: /var/lib/dbox/volumes
 
-# Optional: Custom registries
+# Optional custom registries
 registries:
-  ubuntu: docker.io/library/ubuntu
-  kali: docker.io/kalilinux/kali-rolling
-  debian: docker.io/library/debian
+    alpine: docker.io/library/alpine
+    ubuntu: docker.io/library/ubuntu
+    debian: docker.io/library/debian
+    archlinux: docker.io/library/archlinux
+    fedora: docker.io/library/fedora
+    kali: docker.io/kalilinux/kali-rolling
+
