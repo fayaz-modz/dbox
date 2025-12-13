@@ -590,6 +590,60 @@ func UsageCmd() *cobra.Command {
 	return cmd
 }
 
+func VersionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Show dbox version information",
+		Long:  "Display version information for dbox and its runtime",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := cmd.Context().Value("config").(*Config)
+			ctx := cmd.Context()
+
+			// Get version info from context
+			versionInfo := ctx.Value("version").(map[string]string)
+			version := versionInfo["version"]
+			goVersion := versionInfo["go_version"]
+			commit := versionInfo["commit"]
+			buildTime := versionInfo["build_time"]
+
+			// Get runtime version
+			rt := NewRuntime(cfg)
+			runtimeVersion, err := rt.Version()
+			if err != nil {
+				runtimeVersion = fmt.Sprintf("error - %v", err)
+			}
+
+			if utils.IsJSONMode(ctx) {
+				// JSON output
+				versionData := map[string]interface{}{
+					"dbox_version":    version,
+					"runtime":         cfg.Runtime,
+					"runtime_version": runtimeVersion,
+					"go_version":      goVersion,
+					"commit":          commit,
+					"build_time":      buildTime,
+				}
+				return utils.PrintJSONData(versionData)
+			} else {
+				// Regular text output
+				utils.PrintSectionHeader("Version Information")
+				utils.PrintKeyValue("dbox", version)
+				utils.PrintKeyValue("Runtime", cfg.Runtime)
+				utils.PrintKeyValue("Runtime Version", runtimeVersion)
+				utils.PrintKeyValue("Go Version", goVersion)
+				if commit != "unknown" {
+					utils.PrintKeyValue("Commit", commit)
+				}
+				if buildTime != "unknown" {
+					utils.PrintKeyValue("Build Time", buildTime)
+				}
+				return nil
+			}
+		},
+	}
+}
+
 func CompletionCmd(rootCmd *cobra.Command) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "completion [bash|zsh|fish|powershell]",

@@ -13,6 +13,11 @@ import (
 
 var (
 	cfg *Config
+	// Build variables set by ldflags
+	Version   = "dev"
+	GoVersion = "dev"
+	Commit    = "unknown"
+	BuildTime = "unknown"
 )
 
 func main() {
@@ -41,6 +46,12 @@ func main() {
 			ctx := context.WithValue(cmd.Context(), "config", cfg)
 			ctx = context.WithValue(ctx, "verbose", verbose)
 			ctx = context.WithValue(ctx, "json", jsonOutput)
+			ctx = context.WithValue(ctx, "version", map[string]string{
+				"version":    Version,
+				"go_version": GoVersion,
+				"commit":     Commit,
+				"build_time": BuildTime,
+			})
 			cmd.SetContext(ctx)
 			return nil
 		},
@@ -76,6 +87,7 @@ func main() {
 		cli.UsageCmd(),
 		cli.VolumeCmd(),
 		cli.ImageCmd(),
+		cli.VersionCmd(),
 		cli.CompletionCmd(rootCmd),
 	)
 

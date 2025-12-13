@@ -7,8 +7,15 @@ EXECUTABLE := dbox
 # The directory where binaries will be placed
 BINDIR := bin
 
+# Version information (can be overridden during build)
+VERSION ?= dev
+COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+BUILD_TIME ?= $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
+GO_VERSION ?= $(shell go version | awk '{print $$3}' | sed 's/go//')
+
 # Go build flags for creating smaller binaries (strip debug info and symbols)
-LDFLAGS := -ldflags="-s -w"
+VERSION_FLAGS := -X main.Version=$(VERSION) -X main.Commit=$(COMMIT) -X main.BuildTime=$(BUILD_TIME) -X main.GoVersion=$(GO_VERSION)
+LDFLAGS := -ldflags="-s -w $(VERSION_FLAGS)"
 
 # C compiler for native (amd64) builds.
 CC_AMD64 := clang
@@ -28,12 +35,13 @@ ANDROID_API_LEVEL ?= 21
 
 # --- Targets ---
 
-.PHONY: all help clean linux linux-amd64 linux-arm64 android android-arm64 android-x86_64 static-musl
+.PHONY: all help clean dev linux linux-amd64 linux-arm64 android android-arm64 android-x86_64 static-musl
 
 help:
 	@echo "Usage: make <target>"
 	@echo ""
 	@echo "Available Targets:"
+	@echo "  dev           Fast development build for current platform (outputs to ./dbox)."
 	@echo "  all           Builds for common Linux platforms (amd64, arm64) and Android (arm64, x86_64)."
 	@echo "  linux         Builds Linux binaries (amd64, arm64) using the appropriate C toolchains."
 	@echo "  linux-amd64   Builds for Linux x86_64 using clang."
@@ -49,6 +57,11 @@ help:
 	@echo "  sudo apt-get install gcc-aarch64-linux-gnu"
 	@echo ""
 
+
+# Fast development build for current platform
+dev:
+	@echo "--> Building development version for current platform..."
+	@go build -ldflags="-X main.Version=dev -X main.GoVersion=$(shell go version | awk '{print $$3}' | sed 's/go//') -X main.Commit=dev -X main.BuildTime=dev" -o $(EXECUTABLE) .
 
 all: linux android
 

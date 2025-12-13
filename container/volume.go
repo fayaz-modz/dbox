@@ -38,10 +38,11 @@ func (cm *ContainerManager) ListVolumesWithContext(ctx any) error {
 	var w *utils.TableFormatter
 	if utils.IsJSONMode(ctx) {
 		w = utils.NewJSONFormatter()
+		w.AddHeader("name", "driver", "mountpoint", "created_at")
 	} else {
 		w = utils.NewTableFormatter()
+		w.AddHeader("NAME", "DRIVER", "MOUNTPOINT", "CREATED")
 	}
-	w.AddHeader("NAME", "DRIVER", "MOUNTPOINT", "CREATED")
 
 	for _, entry := range entries {
 		if entry.IsDir() {
@@ -65,7 +66,7 @@ func (cm *ContainerManager) ListVolumesWithContext(ctx any) error {
 							created = "unknown"
 						}
 					}
-					w.AddRow(metadata.Name, metadata.Driver, metadata.Mountpoint, created)
+					w.AddRow(metadata.Name, metadata.Driver, metadata.Mountpoint, metadata.CreatedAt)
 				}
 			} else {
 				// Fallback for volumes without metadata
